@@ -1,0 +1,10 @@
+# Secrets and data: never on Git
+backend/.env
+backend/data/
+!backend/data/.gitkeep
+__pycache__/
+.pytest_cache/
+# Angular
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/

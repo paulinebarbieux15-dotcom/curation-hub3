@@ -1,0 +1,253 @@
+"""Shared team social account (LinkedIn, X, Facebook, Instagram), always logged in.
+
+Two mechanisms work together:
+
+1. The SESSION (cookies) is stored in data/secrets/social_session.json and reused
+   for every capture, so posts open as the logged-in team account.
+2. The account CREDENTIALS (in .env only, never in code or in the database) let the
+   app LOG BACK IN BY ITSELF when the session expires: it fills the network's login
+   form, handles two-factor authentication when a TOTP secret is provided, then
+   saves the fresh session.
+
+`python -m app.social_login` remains available for a manual login when a network
+asks for a check that cannot be automated (captcha, SMS code...).
+"""
+import os
+import time
+from datetime import datetime
+from urllib.parse import urlsplit
+
+from . import config, db
+
+_LOGGED_OUT_SIGNS = ("/login", "/signin", "/authwall", "/checkpoint", "/uas/login", "/i/flow/login",
+                     "accounts/login", "/session", "/challenge")
+
+# How to log in to each network. CSS selectors target the login form fields:
+# if a network changes its page, this is the place to update.
+NETWORKS: dict[str, dict] = {
+    "linkedin": {
+        "domains": ["linkedin.com", "lnkd.in"],
+        "login_page": "https://www.linkedin.com/login",
+        "steps": [
+            ("fill", "#username", "username"),
+            ("fill", "#password", "password"),
+            ("click", "button[type=submit]"),
+        ],
+        "otp_field": "input[name=pin], #input__phone_verification_pin",
+    },
+    "x": {
+        "domains": ["x.com", "twitter.com", "t.co"],
+        "login_page": "https://x.com/i/flow/login",
+        "steps": [
+            ("fill", "input[autocomplete=username]", "username"),
+            ("click", "button:has-text('Next'), button:has-text('Suivant')"),
+            ("fill", "input[name=password]", "password"),
+            ("click", "button[data-testid=LoginForm_Login_Button]"),
+        ],
+        "otp_field": "input[data-testid=ocfEnterTextTextInput]",
+    },
+    "facebook": {
+        "domains": ["facebook.com"],
+        "login_page": "https://www.facebook.com/login",
+        "steps": [
+            ("fill", "#email", "username"),
+            ("fill", "#pass", "password"),
+            ("click", "button[name=login]"),
+        ],
+        "otp_field": "input[name=approvals_code]",
+    },
+    "instagram": {
+        "domains": ["instagram.com"],
+        "login_page": "https://www.instagram.com/accounts/login/",
+        "steps": [
+            ("fill", "input[name=username]", "username"),
+            ("fill", "input[name=password]", "password"),
+            ("click", "button[type=submit]"),
+        ],
+        "otp_field": "input[name=verificationCode]",
+    },
+}
+
+
+class SocialSessionError(Exception):
+    pass
+
+
+# ----------------------------------------------------------------- links
+def _host(url: str) -> str:
+    host = urlsplit(url if "://" in url else "https://" + url).netloc.lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def _matches(host: str, domain: str) -> bool:
+    return host == domain or host.endswith("." + domain)
+
+
+def is_social(url: str) -> bool:
+    return any(_matches(_host(url), d) for d in config.SOCIAL_DOMAINS)
+
+
+def network_for(url: str) -> str | None:
+    host = _host(url)
+    return next((n for n, r in NETWORKS.items() if any(_matches(host, d) for d in r["domains"])), None)
+
+
+def looks_logged_out(final_url: str) -> bool:
+    return any(s in final_url.lower() for s in _LOGGED_OUT_SIGNS)
+
+
+# ----------------------------------------------------------------- credentials (.env)
+def credentials(name: str) -> dict:
+    """SOCIAL_LINKEDIN_USERNAME, SOCIAL_LINKEDIN_PASSWORD, SOCIAL_LINKEDIN_TOTP."""
+    prefix = f"SOCIAL_{name.upper()}_"
+    return {
+        "username": os.getenv(prefix + "USERNAME", ""),
+        "password": os.getenv(prefix + "PASSWORD", ""),
+        "totp": os.getenv(prefix + "TOTP", "").replace(" ", ""),
+    }
+
+
+def has_credentials(name: str | None) -> bool:
+    if not name:
+        return False
+    c = credentials(name)
+    return bool(c["username"] and c["password"])
+
+
+# ----------------------------------------------------------------- switch & session
+def enabled() -> bool:
+    with db.tx() as con:
+        return bool(db.get_setting(con, "social_enabled", False))
+
+
+def set_enabled(value: bool) -> None:
+    with db.tx() as con:
+        db.set_setting(con, "social_enabled", bool(value))
+
+
+def record_login(name: str, result: str) -> None:
+    with db.tx() as con:
+        logins = db.get_setting(con, "social_logins", {})
+        logins[name] = {"at": datetime.now().isoformat(timespec="minutes"), "result": result}
+        db.set_setting(con, "social_logins", logins)
+
+
+def session_present() -> bool:
+    f = config.SOCIAL_SESSION_FILE
+    return f.exists() and f.stat().st_size > 0
+
+
+def protect_file() -> None:
+    try:
+        os.chmod(config.SOCIAL_SESSION_FILE, 0o600)
+    except OSError:
+        pass
+
+
+def status() -> dict:
+    """Never returns credentials, only whether they are configured."""
+    updated = None
+    if session_present():
+        updated = datetime.fromtimestamp(config.SOCIAL_SESSION_FILE.stat().st_mtime).isoformat(timespec="minutes")
+    with db.tx() as con:
+        logins = db.get_setting(con, "social_logins", {})
+        on = bool(db.get_setting(con, "social_enabled", False))
+    return {
+        "enabled": on,
+        "session_present": session_present(),
+        "session_updated_at": updated,
+        "domains": config.SOCIAL_DOMAINS,
+        "networks": [
+            {
+                "name": n,
+                "credentials": has_credentials(n),
+                "auto_2fa": bool(credentials(n)["totp"]),
+                "last_login": logins.get(n),
+            }
+            for n in NETWORKS
+        ],
+    }
+
+
+def check_before_capture(url: str) -> bool:
+    """True when the URL must be captured with the shared account.
+    Raises a clear error if collection is off or nothing allows logging in."""
+    if not is_social(url):
+        return False
+    if not enabled():
+        raise SocialSessionError("Social capture is turned off: enable it in Settings > Social account.")
+    if not session_present() and not has_credentials(network_for(url)):
+        raise SocialSessionError(
+            "No saved session and no credentials for this network: add them to .env "
+            "or run `python -m app.social_login`.")
+    return True
+
+
+# ----------------------------------------------------------------- automatic login
+def auto_login(context, name: str) -> None:
+    """Log in to `name` in the given Playwright context and save the session."""
+    if name not in NETWORKS:
+        raise SocialSessionError(f"Automatic login is not configured for '{name}'.")
+    if not has_credentials(name):
+        raise SocialSessionError(
+            f"Missing {name} credentials: set SOCIAL_{name.upper()}_USERNAME and "
+            f"SOCIAL_{name.upper()}_PASSWORD in .env.")
+
+    r, cred = NETWORKS[name], credentials(name)
+    page = context.new_page()
+    try:
+        page.goto(r["login_page"], wait_until="domcontentloaded", timeout=config.CAPTURE_TIMEOUT_MS)
+        page.wait_for_timeout(1500)
+        if not looks_logged_out(page.url):
+            record_login(name, "already logged in")
+            return
+        for step in r["steps"]:
+            el = page.locator(step[1]).first
+            el.wait_for(state="visible", timeout=15000)
+            if step[0] == "fill":
+                el.fill(cred[step[2]])
+            else:
+                el.click()
+            page.wait_for_timeout(800)
+        _two_factor(page, r, cred, name)
+        _wait_logged_in(page, name)
+        context.storage_state(path=str(config.SOCIAL_SESSION_FILE))
+        protect_file()
+        record_login(name, "logged in automatically")
+    except SocialSessionError as e:
+        record_login(name, f"failed: {e}")
+        raise
+    except Exception as e:
+        record_login(name, "failed: unexpected login page")
+        raise SocialSessionError(
+            f"Automatic login to {name} failed ({type(e).__name__}). The login page may have changed: "
+            "log in manually with `python -m app.social_login`.") from e
+    finally:
+        page.close()
+
+
+def _two_factor(page, r: dict, cred: dict, name: str) -> None:
+    try:
+        page.locator(r["otp_field"]).first.wait_for(state="visible", timeout=6000)
+    except Exception:
+        return
+    if not cred["totp"]:
+        raise SocialSessionError(
+            f"{name} asks for a verification code. Add SOCIAL_{name.upper()}_TOTP to .env "
+            "(authenticator app secret) or log in manually with `python -m app.social_login`.")
+    import pyotp
+
+    el = page.locator(r["otp_field"]).first
+    el.fill(pyotp.TOTP(cred["totp"]).now())
+    el.press("Enter")
+
+
+def _wait_logged_in(page, name: str, timeout_s: float = 25) -> None:
+    end = time.monotonic() + timeout_s
+    while time.monotonic() < end:
+        if not looks_logged_out(page.url):
+            return
+        page.wait_for_timeout(1000)
+    raise SocialSessionError(
+        f"{name} did not accept the login (wrong credentials or security check). "
+        "Check .env or log in manually with `python -m app.social_login`.")
