@@ -123,7 +123,8 @@ def generate(period: str, granularity: str, user_id: int | None, start: str | No
     else:
         synthesis = "## Executive summary\nNo article was validated over this period."
     body = synthesis + _stats_section(items, granularity) + (_links_section(items, granularity) if items else "")
-    markdown_text = f"# {title}\n\n*{len(items)} validated article(s) · {label} · { {"general": "general view", "doctype": "grouped by document type", "user": "grouped by analyst"}[granularity] }*\n\n{body}\n"
+    view = {"general": "general view", "doctype": "grouped by document type", "user": "grouped by analyst"}[granularity]
+    markdown_text = f"# {title}\n\n*{len(items)} validated article(s) · {label} · {view}*\n\n{body}\n"
 
     html_body = md.markdown(markdown_text, extensions=["tables", "sane_lists"])
     page = (f"<!doctype html><html><head><meta charset='utf-8'><title>{html.escape(title)}</title>"
