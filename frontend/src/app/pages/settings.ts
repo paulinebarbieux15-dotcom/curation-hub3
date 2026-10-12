@@ -15,36 +15,39 @@ import { errorMessage, formatDate } from '../ui/util';
     <div class="settings-grid">
       <section class="card span-2" id="profiles">
         <h2>Profiles</h2>
-        <p class="muted small">Auto-distribution is a capped round-robin among <b>active</b> profiles
+        <p class="muted small">Set each analyst's <b>AntBox redactor</b>: it fills the “Attachment redactor” column automatically on approval.
+          Auto-distribution is a capped round-robin among <b>active</b> profiles
           (max {{ s()?.distribution?.queue_cap_per_user || '∞' }} open items each; overflow goes to the global queue).</p>
         <app-profiles-manager />
       </section>
 
-      <section class="card">
-        <h2>Themes</h2>
-        <p class="muted small">Controlled list the AI picks from (1–3 per link). Dashboard only — never exported.</p>
-        <div class="chips">
-          @for (t of themes(); track t) {
-            <span class="chip">{{ t }} <button class="chip-x" (click)="removeTheme(t)" [attr.aria-label]="'Remove ' + t">×</button></span>
-          }
-        </div>
-        <form class="row gap-s mt-s" (ngSubmit)="addTheme()">
-          <input name="t" [(ngModel)]="newTheme" placeholder="New theme" />
-          <button class="btn" [disabled]="!newTheme.trim()">Add</button>
-          <span class="grow"></span>
-          <button type="button" class="btn primary" [disabled]="!themesDirty()" (click)="saveThemes()">Save themes</button>
-        </form>
+      <section class="card span-2">
+        <h2>AntBox import CSV</h2>
+        <p class="muted small">Each approved link gives one row of the AntBox connector CSV (separator “{{ s()?.csv?.separator }}”,
+          multi-values “{{ s()?.csv?.multi_separator }}”), next to its PDF with the same name. The package holds one CSV per
+          document type: <code>connector_press_article.csv</code> and <code>connector_commercial_brochure.csv</code>.</p>
+        <table class="table compact">
+          <thead><tr><th>Column</th><th>Filled by</th><th>Referential field</th></tr></thead>
+          <tbody>
+            @for (c of s()?.antbox_csv || []; track c.column) {
+              <tr><td><code>{{ c.column }}</code></td><td>{{ c.rule }}</td>
+                <td class="muted small">{{ c.referential_field ? c.referential_field + ' (' + c.values + ' values)' : '—' }}</td></tr>
+            }
+          </tbody>
+        </table>
+        <a class="btn small mt-s" [href]="api.exportApprovedUrl('both')">Download AntBox package (all approved)</a>
       </section>
 
       <section class="card">
         <h2>AntBox referential</h2>
         <p class="small">File: <code>{{ s()?.referential?.file }}</code> · {{ api.referential().length }} fields</p>
         <table class="table compact">
-          <thead><tr><th>Field</th><th>Values</th><th>Type</th><th>AI</th></tr></thead>
+          <thead><tr><th>Field</th><th>Values</th><th>Type</th><th>Filled by</th></tr></thead>
           <tbody>
             @for (f of api.referential(); track f.name) {
-              <tr><td>{{ f.name }} @if (f.required) { <span class="req">required</span> }</td><td>{{ f.values.length }}</td>
-                <td>{{ f.multi ? 'multi' : 'single' }}</td><td>{{ f.ai ? 'yes' : 'manual' }}</td></tr>
+              <tr><td>{{ f.name }} @if (f.source_name) { <span class="muted small">({{ f.source_name }})</span> }
+                @if (f.required) { <span class="req">required</span> }</td><td>{{ f.values.length }}</td>
+                <td>{{ f.multi ? 'multi' : 'single' }}</td><td>{{ f.mode }}</td></tr>
             }
           </tbody>
         </table>
@@ -106,7 +109,7 @@ import { errorMessage, formatDate } from '../ui/util';
         @if (s()?.worker; as w) {
           <p class="small">{{ w.pending }} pending · {{ w.running }} running · {{ w.failed }} failed</p>
         }
-        <p class="muted small">CSV export: separator “{{ s()?.csv?.separator }}”, multi-values “{{ s()?.csv?.multi_separator }}”, values as {{ s()?.csv?.values }}.</p>
+        
       </section>
     </div>
   `,
@@ -115,9 +118,6 @@ export class Settings implements OnInit {
   api = inject(ApiService);
   toast = inject(ToastService);
   s = signal<SettingsModel | null>(null);
-  themes = signal<string[]>([]);
-  themesDirty = signal(false);
-  newTheme = '';
   loginBusy = signal<string | null>(null);
   llmAnswer = signal('');
   date = (d: string | null) => formatDate(d);
@@ -127,27 +127,6 @@ export class Settings implements OnInit {
   load() {
     this.api.getSettings().subscribe((s) => {
       this.s.set(s);
-      this.themes.set(s.themes);
-      this.themesDirty.set(false);
-    });
-  }
-
-  addTheme() {
-    const t = this.newTheme.trim();
-    if (t && !this.themes().some((x) => x.toLowerCase() === t.toLowerCase())) {
-      this.themes.update((l) => [...l, t]);
-      this.themesDirty.set(true);
-    }
-    this.newTheme = '';
-  }
-  removeTheme(t: string) {
-    this.themes.update((l) => l.filter((x) => x !== t));
-    this.themesDirty.set(true);
-  }
-  saveThemes() {
-    this.api.setThemes(this.themes()).subscribe({
-      next: () => { this.themesDirty.set(false); this.toast.success('Themes saved'); },
-      error: (e) => this.toast.error(errorMessage(e)),
     });
   }
 

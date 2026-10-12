@@ -71,9 +71,10 @@ const INFO_FIELDS: { key: keyof LinkInfo; label: string; type: string }[] = [
           <section>
             <div class="section-head">
               <h3>AntBox metadata</h3>
+              <span class="muted small">= the columns of the AntBox import CSV.</span>
               <span class="muted small">AI values are kept only when certain (≥ {{ threshold }}% + evidence). Hover a chip for the evidence.</span>
             </div>
-            @for (f of api.referential(); track f.name) {
+            @for (f of fields(); track f.name) {
               <app-field-picker [field]="f" [values]="metadata()[f.name] || []" [decisions]="decisions(f.name)"
                                 [disabled]="readonly()" (changed)="setField(f.name, $event)" />
             } @empty {
@@ -96,21 +97,6 @@ const INFO_FIELDS: { key: keyof LinkInfo; label: string; type: string }[] = [
                 <span>Companies <span class="muted small">(comma separated)</span></span>
                 <input [ngModel]="companies" (ngModelChange)="companies = $event; dirty.set(true)" [disabled]="readonly()" />
               </label>
-            </div>
-          </section>
-
-          <section>
-            <div class="section-head">
-              <h3>Themes</h3>
-              <span class="muted small">Dashboard only — never exported</span>
-            </div>
-            <div class="chips">
-              @for (t of api.themes(); track t) {
-                <button type="button" class="chip toggle" [class.on]="themes().includes(t)" [disabled]="readonly()"
-                        (click)="toggleTheme(t)" [title]="l.themes_ai.includes(t) ? 'Suggested by the AI' : ''">
-                  {{ t }} @if (l.themes_ai.includes(t)) { <span class="conf">AI</span> }
-                </button>
-              }
             </div>
           </section>
 
@@ -198,7 +184,6 @@ export class LinkPanel implements OnDestroy {
   rejecting = signal(false);
   text = signal<string | null>(null);
   metadata = signal<Record<string, string[]>>({});
-  themes = signal<string[]>([]);
   title = '';
   summary = '';
   info: LinkInfo = {};
@@ -207,6 +192,7 @@ export class LinkPanel implements OnDestroy {
   infoFields = INFO_FIELDS;
   threshold = 80;
 
+  readonly fields = computed(() => this.api.referential().filter((f) => f.mode !== 'unused'));
   readonly activeUsers = computed(() => this.api.users().filter((u) => !u.deleted_at));
   readonly lockedByOther = computed(() => {
     const l = this.link();
@@ -258,7 +244,6 @@ export class LinkPanel implements OnDestroy {
         this.metadata.set({ ...l.metadata });
         this.info = { ...l.info };
         this.companies = (l.info.companies || []).join(', ');
-        this.themes.set([...l.themes]);
         this.dirty.set(false);
         if (lock && l.status === 'to_review') this.takeLock(l.id);
       },
@@ -299,10 +284,6 @@ export class LinkPanel implements OnDestroy {
     this.info = { ...this.info, [key]: value || null };
     this.dirty.set(true);
   }
-  toggleTheme(t: string) {
-    this.themes.update((l) => (l.includes(t) ? l.filter((x) => x !== t) : [...l, t]));
-    this.dirty.set(true);
-  }
 
   toggleText() {
     if (this.text() !== null) return this.text.set(null);
@@ -320,7 +301,6 @@ export class LinkPanel implements OnDestroy {
       summary_html: this.summary,
       metadata: this.metadata(),
       info: { ...this.info, companies: this.companies.split(',').map((c) => c.trim()).filter(Boolean) },
-      themes: this.themes(),
     };
   }
 

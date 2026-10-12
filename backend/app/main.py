@@ -34,9 +34,6 @@ TODO = db.TODO_STATUSES
 @asynccontextmanager
 async def lifespan(_app):
     db.init()
-    with db.tx() as con:
-        if db.get_setting(con, "themes") is None:
-            db.set_setting(con, "themes", config.DEFAULT_THEMES)
     live.bind_loop(asyncio.get_running_loop())
     if config.WORKER_AUTOSTART:
         worker.start()
@@ -94,7 +91,6 @@ class LinkPatch(BaseModel):
     summary_html: str | None = None
     metadata: dict[str, list[str]] | None = None
     info: dict | None = None
-    themes: list[str] | None = None
 
 
 class AssignIn(BaseModel):
@@ -116,12 +112,8 @@ class ReportIn(BaseModel):
     period: str = "7d"                # 7d | 30d | custom
     start: str | None = None
     end: str | None = None
-    granularity: str = "general"      # general | theme | user
+    granularity: str = "general"      # general | doctype | user
     title: str | None = None
-
-
-class ThemesIn(BaseModel):
-    themes: list[str]
 
 
 class ToggleIn(BaseModel):
@@ -291,7 +283,7 @@ async def ingest_file(file: UploadFile = File(...), mode: str = Form("auto"), us
 # ================================================================= links
 @app.get("/api/links", tags=["links"])
 def list_links(
-    assignee: str = "all", state: str = "todo", status: str | None = None, theme: str | None = None,
+    assignee: str = "all", state: str = "todo", status: str | None = None, doc_type: str | None = None,
     date_from: str | None = None, date_to: str | None = None, q: str | None = None,
     sort: str = "created_at", order: str = "desc", limit: int = Query(200, le=1000), offset: int = 0,
     user: dict | None = Depends(current_user),
@@ -314,9 +306,9 @@ def list_links(
     elif state == "done":
         where.append(f"l.status IN ({','.join('?' * len(db.DONE_STATUSES))})")
         params += db.DONE_STATUSES
-    if theme:
-        where.append("l.themes LIKE ?")
-        params.append(f'%{json.dumps(theme)[1:-1]}%')
+    if doc_type:
+        where.append("EXISTS (SELECT 1 FROM json_each(l.metadata, '$.\"Document type\"') WHERE value = ?)")
+        params.append(doc_type)
     if date_from:
         where.append("substr(l.created_at,1,10) >= ?")
         params.append(date_from)
@@ -389,14 +381,6 @@ def update_link(link_id: int, data: LinkPatch, user: dict = Depends(require_user
         if data.info is not None:
             sets.append("info=?")
             params.append(json.dumps({**link["info"], **data.info}, ensure_ascii=False))
-        if data.themes is not None:
-            allowed = {t.lower(): t for t in pipeline.themes(con)}
-            th = []
-            for t in data.themes:
-                if t.lower() in allowed and allowed[t.lower()] not in th:
-                    th.append(allowed[t.lower()])
-            sets.append("themes=?")
-            params.append(json.dumps(th, ensure_ascii=False))
         if sets:
             con.execute(f"UPDATE links SET {', '.join(sets)}, updated_at=? WHERE id=?", (*params, db.now(), link_id))
             db.log(con, "edited", link_id, user["id"], ", ".join(s.split("=")[0] for s in sets))
@@ -418,6 +402,10 @@ def approve(link_id: int, user: dict = Depends(require_user)):
         if missing:
             raise HTTPException(422, f"Required field(s) empty: {', '.join(missing)}")
         now = db.now()
+        auto = pipeline.redactor_values(user.get("antbox_redactor"))
+        if auto:   # 'Attachment redactor' = the analyst who validates
+            meta = {**link["metadata"], config.REDACTOR_FIELD: auto}
+            con.execute("UPDATE links SET metadata=? WHERE id=?", (json.dumps(meta, ensure_ascii=False), link_id))
         con.execute("UPDATE links SET status='approved', approved_at=?, approved_by=?, locked_by=NULL, "
                     "locked_until=NULL, updated_at=? WHERE id=?", (now, user["id"], now, link_id))
         link = _link(con, link_id)
@@ -553,7 +541,7 @@ def link_pdf(link_id: int):
 
 @app.get("/api/links/{link_id}/export", tags=["exports"])
 def export_link(link_id: int, format: str = Query("both", pattern="^(pdf|csv|both)$")):
-    """PDF, CSV or both (zip, same base name). Theme tags are never exported."""
+    """PDF, AntBox import CSV, or both (zip, same base name)."""
     with db.tx() as con:
         link = _link(con, link_id)
     try:
@@ -726,33 +714,19 @@ async def upload_referential(file: UploadFile = File(...)):
 @app.get("/api/settings", tags=["settings"])
 def get_settings():
     from urllib.parse import urlsplit
-    with db.tx() as con:
-        theme_list = pipeline.themes(con)
     return {
-        "themes": theme_list,
         "social": social.status(),
         "llm": {"fake": config.LLM_FAKE, "configured": bool(config.LLM_URL), "model": config.LLM_MODEL,
                 "host": urlsplit(config.LLM_URL).netloc if config.LLM_URL else "",
                 "confidence_threshold": config.AI_CONFIDENCE_THRESHOLD, "require_evidence": config.AI_REQUIRE_EVIDENCE},
         "referential": {"file": config.find_referential().name, "fields": len(referential.fields()),
-                        "required": config.REQUIRED_FIELDS, "ai_skipped": config.AI_SKIPPED_FIELDS},
+                        "required": config.REQUIRED_FIELDS},
+        "antbox_csv": exports.column_rules(),
         "distribution": {"queue_cap_per_user": config.QUEUE_CAP_PER_USER},
         "notifications": {"google_chat": bool(config.GOOGLE_CHAT_WEBHOOK), "digest_hour": config.DIGEST_HOUR},
         "csv": {"separator": config.CSV_SEPARATOR, "multi_separator": config.CSV_MULTI_SEPARATOR, "values": config.CSV_VALUES},
         "worker": worker.queue_status(),
     }
-
-
-@app.put("/api/settings/themes", tags=["settings"])
-def set_themes(data: ThemesIn):
-    clean = []
-    for t in data.themes:
-        t = " ".join(t.split())
-        if t and t.lower() not in [c.lower() for c in clean]:
-            clean.append(t)
-    with db.tx() as con:
-        db.set_setting(con, "themes", clean)
-    return {"themes": clean}
 
 
 @app.put("/api/settings/social", tags=["settings"])

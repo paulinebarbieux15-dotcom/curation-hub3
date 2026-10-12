@@ -45,8 +45,6 @@ export interface Link {
   metadata: Record<string, string[]>;
   metadata_ai: Record<string, string[]>;
   info: LinkInfo;
-  themes: string[];
-  themes_ai: string[];
   ai_details: Record<string, AiDecision[]>;
   error: string | null;
   near_duplicate_of: number | null;
@@ -88,6 +86,8 @@ export interface IngestResult {
 export interface RefValue { label: string; display: string; id: string; }
 export interface RefField {
   name: string; id: string; multi: boolean; ai: boolean; required: boolean; values: RefValue[];
+  mode: 'ai' | 'auto' | 'manual' | 'unused';
+  source_name: string;
 }
 
 export interface Stats {
@@ -142,7 +142,6 @@ export interface Report {
 }
 
 export interface Settings {
-  themes: string[];
   social: {
     enabled: boolean;
     session_present: boolean;
@@ -151,7 +150,8 @@ export interface Settings {
     networks: { name: string; credentials: boolean; auto_2fa: boolean; last_login: { at: string; result: string } | null }[];
   };
   llm: { fake: boolean; configured: boolean; model: string; host: string; confidence_threshold: number; require_evidence: boolean };
-  referential: { file: string; fields: number; required: string[]; ai_skipped: string[] };
+  referential: { file: string; fields: number; required: string[] };
+  antbox_csv: { column: string; rule: string; referential_field: string | null; values: number }[];
   distribution: { queue_cap_per_user: number };
   notifications: { google_chat: boolean; digest_hour: number };
   csv: { separator: string; multi_separator: string; values: string };
@@ -161,7 +161,7 @@ export interface Settings {
 export interface LinkFilters {
   assignee: 'me' | 'all' | 'global' | string;
   state: 'todo' | 'done' | 'all';
-  theme: string;
+  doc_type: string;
   date_from: string;
   date_to: string;
   q: string;

@@ -73,7 +73,7 @@ Certificate error? `pip install --use-feature=truststore -r requirements.txt`
 python -m pytest -q
 ```
 
-You should read `21 passed`. Then:
+You should read `22 passed`. Then:
 
 ```
 uvicorn app.main:app --reload
@@ -86,7 +86,7 @@ First steps in the app:
 2. **Add links**: paste any text (an email, chat messages…). URLs are detected live; green = new,
    orange = already in the database. Choose *Auto* (round-robin), *Me* or *Global queue*, then **Add**.
 3. A few seconds later the links are **To review**. Click a row: the side panel shows the AI summary
-   (editable), the AntBox fields with confidence badges (hover for the evidence quote), themes, information.
+   (editable) and the AntBox CSV columns with confidence badges (hover for the evidence quote).
 4. **Approve** (or `A` / `Ctrl+Enter`). The link goes to the **Registry** with its permanent PDF and CSV.
 5. **Reports** → period + granularity → **Generate report** → download the PDF.
 
@@ -99,10 +99,10 @@ Keyboard: `J`/`K` move, `Enter` open, `A` approve, `X` reject, `C` claim, `Ctrl+
 | Header | Profile switcher; add / rename / mark away / delete profiles. Delete is a soft delete (history kept); pending items go to the global queue or are redistributed. |
 | Ingestion | Smart paste (regex extraction from free text), live duplicate check (normalised URL without `utm_*`, `fbclid`, `www.`, `m.`, trailing `/`, fragment), manual input with instant validation, CSV/TXT import, capped round-robin distribution. After capture, redirects / canonical URLs reveal hidden duplicates, and SimHash flags near-identical content. |
 | Social | LinkedIn, X, Instagram, Facebook captured with the shared account: cookies kept in `data/secrets/social_session.json`, automatic re-login (with TOTP 2FA) from the credentials in `.env`, human-like pacing (20–40 s, daily cap). Turned on in **Settings**. |
-| Dashboard | Widgets: my queue, global queue, progress today, 7-day velocity (me vs team), health (processing, errors, aging items, AI acceptance). Table with filters (Me/All/Global, To do/Done/All, theme, date range, search), sorting, bulk actions, aging badges (3 and 7 days), live updates, edit locks. |
-| Validation | LLM auto-fill with a strict policy: each value needs confidence ≥ 80 % **and** a verbatim evidence quote found in the article **and** must exist in the referential, otherwise the field stays empty (uncertain suggestions are shown as one-click ghost chips). Themes are dashboard-only and never exported. WYSIWYG summary. Export PDF, CSV or both (same file name, zip). |
+| Dashboard | Widgets: my queue, global queue, progress today, 7-day velocity (me vs team), health (processing, errors, aging items, AI acceptance). Table with filters (Me/All/Global, To do/Done/All, document type, date range, search), sorting, bulk actions, aging badges (3 and 7 days), live updates, edit locks. |
+| Validation | LLM auto-fill with a strict policy: each value needs confidence ≥ 80 % **and** a verbatim evidence quote found in the article **and** must exist in the referential, otherwise the field stays empty (uncertain suggestions are shown as one-click ghost chips). WYSIWYG summary (dashboard and reports). Export PDF, AntBox import CSV or both (same file name, zip). |
 | Registry | Append-only list (date, title, metadata, validating operator, permanent PDF/CSV links). The database refuses edits/deletions; a SHA-256 hash chain + file hashes can be verified in one click. |
-| Reports | Last 7 days / last month / custom; general, by theme or by user. The LLM writes the executive synthesis citing articles as [n]; the list of links with their summaries is appended by code (always complete and correct). Markdown, HTML, PDF. |
+| Reports | Last 7 days / last month / custom; general, by document type or by user. The LLM writes the executive synthesis citing articles as [n]; the list of links with their summaries is appended by code (always complete and correct). Markdown, HTML, PDF. |
 | Extras | Google Chat daily digest, job queue with retries (30 s / 2 min / 10 min), few-shot examples from validated records to improve tagging, command palette, undo toasts. |
 
 ## 5. Connect the internal LLM
@@ -137,12 +137,30 @@ If the LLM rejects `response_format`, set `LLM_JSON_MODE=false`. Strictness: `AI
 
 `.env` and `data\secrets\` contain secrets: never on Git, never shared.
 
-## 7. AntBox CSV format
+## 7. AntBox import CSV
 
-One column per referential field is added automatically after the fixed columns
-(`FIXED_COLUMNS` in `app\exports.py`: file, title, source_url, published_date, author, source, summary).
-Adjust names/order to match a real AntBox import. `.env`: `CSV_SEPARATOR`, `CSV_MULTI_SEPARATOR`,
-`CSV_VALUES=label` or `id`. Themes are never exported.
+Each approved link gives a PDF and one row of the AntBox connector CSV (`;` separated), in the exact template order:
+
+| Column | Filled by |
+|---|---|
+| File Name | PDF file name (same name as the PDF in the package) |
+| URL | source URL (tracking parameters removed) |
+| Check | empty — filled by the connector |
+| Attachment Clearance Level | constant `Public` (`ANTBOX_CLEARANCE_LEVEL`) |
+| Attachment Co-redactor | constant `Group: Co-Writer` (`ANTBOX_CO_REDACTOR`) |
+| Document type | LLM: `Press articles / Social Network` or `Commercial Brochure / Manufacturer website` (social links are always press) |
+| Domain | analyst, optional (too complex for the AI) |
+| Attachment redactor | automatic: AntBox redactor of the approving analyst (set it in the profile) |
+| Meeting or Forum | not used (empty) |
+| Year, Parts/Modules, Optionnal, OperationType, Vehicles | LLM, from the referential values (empty when not certain) |
+
+The **AntBox package** (Registry → *AntBox package*, or bulk export) is a zip with one CSV per document type,
+`connector_press_article.csv` and `connector_commercial_brochure.csv`, plus every PDF: import them into AntBox.
+
+When the referential file uses other names than the CSV columns, map them in `.env`:
+`FIELD_MAP=Parts/Modules=Components/Sub-System,OperationType=Mission,Vehicles=Aircrafts` (default).
+Settings → *AntBox import CSV* shows how every column is filled. Other options: `AI_FIELDS`, `UNUSED_FIELDS`,
+`REQUIRED_FIELDS`, `DOCUMENT_TYPES`, `CSV_MULTI_SEPARATOR`, `CSV_VALUES=label` or `id`.
 
 ## 8. Edit the dashboard (Node.js required)
 

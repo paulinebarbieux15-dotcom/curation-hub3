@@ -34,7 +34,9 @@ STRICT RULES — accuracy matters more than completeness:
    If you are not sure, or cannot quote the article, return an EMPTY list. Never guess, never invent.
 4. "info" fields: null when the article does not state them explicitly. Same confidence/evidence rule.
    published_date format: YYYY-MM-DD.
-5. "themes": pick 1 to 3 themes ONLY from this list: {themes}
+5. "Document type": "Press articles / Social Network" for news articles, press releases, blogs and social
+   network posts; "Commercial Brochure / Manufacturer website" for a manufacturer's own product pages,
+   datasheets and brochures.
 6. Reply with ONE valid JSON object and nothing else.
 
 AntBox fields:
@@ -53,8 +55,7 @@ Expected JSON:
     "source": {{"value": "publication name", "confidence": 0.9, "evidence": "quote"}} or null,
     "country": {{"value": "country", "confidence": 0.9, "evidence": "quote"}} or null,
     "companies": [{{"value": "company", "confidence": 0.9, "evidence": "quote"}}]
-  }},
-  "themes": [{{"value": "theme from the list", "confidence": 0.9}}]
+  }}
 }}"""
 
 REPORT_PROMPT = """You are a senior technology-watch analyst writing an executive briefing for management.
@@ -123,7 +124,7 @@ def extract_json(text: str) -> dict:
 
 
 # ----------------------------------------------------------------- prompt
-def build_prompt(themes: list[str], examples: list[dict] | None = None) -> str:
+def build_prompt(examples: list[dict] | None = None) -> str:
     blocks, example = [], []
     for f in referential.fields():
         if not f.ai:
@@ -139,7 +140,6 @@ def build_prompt(themes: list[str], examples: list[dict] | None = None) -> str:
             lines.append(f"- \"{e.get('title') or ''}\" -> {json.dumps(meta, ensure_ascii=False)}")
         ex = "\n".join(lines) + "\n"
     return SYSTEM_PROMPT.format(
-        themes=", ".join(themes) or "(none)",
         fields="\n\n".join(blocks) or "(none)",
         examples=ex,
         metadata_example=",\n".join(example),
@@ -181,7 +181,7 @@ def _judge(item: dict, text_norm: str, need_evidence: bool = True) -> str | None
     return None
 
 
-def filter_answer(raw: dict, text: str, themes: list[str]) -> dict:
+def filter_answer(raw: dict, text: str) -> dict:
     """Apply the high-certainty policy to a raw LLM answer."""
     text_norm = _norm(text)
     details: dict[str, list[dict]] = {}
@@ -228,49 +228,35 @@ def filter_answer(raw: dict, text: str, themes: list[str]) -> dict:
         if decisions:
             details[f"info.{name}"] = decisions
 
-    allowed = {t.lower(): t for t in themes}
-    chosen, decisions = [], []
-    for item in _as_items(raw.get("themes")):
-        official = allowed.get(item["value"].lower())
-        reason = _judge(item, text_norm, need_evidence=False)
-        if official is None:
-            reason = "not in theme list"
-        decisions.append({**item, "value": official or item["value"], "kept": reason is None, "reason": reason or ""})
-        if reason is None and official not in chosen and len(chosen) < 3:
-            chosen.append(official)
-    if decisions:
-        details["themes"] = decisions
-
     return {
         "title": str(raw.get("title") or "").strip(),
         "summary_html": summary_to_html(str(raw.get("summary") or "")),
         "metadata": metadata,
         "info": info,
-        "themes": chosen,
         "details": details,
     }
 
 
 # ----------------------------------------------------------------- calls
-def analyze(title: str, text: str, url: str, themes: list[str], examples: list[dict] | None = None) -> dict:
-    """Returns {title, summary_html, metadata, info, themes, details}."""
+def analyze(title: str, text: str, url: str, examples: list[dict] | None = None) -> dict:
+    """Returns {title, summary_html, metadata, info, details}."""
     if config.LLM_FAKE:
-        raw = _fake_answer(title, text, themes)
+        raw = _fake_answer(title, text)
     else:
         user = f"URL: {url}\nTitle: {title}\n\nArticle text:\n{text[:config.LLM_MAX_CHARS]}"
-        raw = extract_json(_chat(build_prompt(themes, examples), user, json_mode=True))
-    result = filter_answer(raw, f"{title}\n{text}", themes)
+        raw = extract_json(_chat(build_prompt(examples), user, json_mode=True))
+    result = filter_answer(raw, f"{title}\n{text}")
     result["title"] = result["title"] or title
     return result
 
 
 def write_report(items: list[dict], period_label: str, granularity: str) -> str:
-    """Executive synthesis in Markdown. `items`: [{n, title, summary, themes, analyst}]."""
+    """Executive synthesis in Markdown. `items`: [{n, title, summary, doc_type, analyst}]."""
     if config.LLM_FAKE or not items:
         return _fake_report(items, period_label)
     lines = [f"Period: {period_label}. Grouping requested: {granularity}.", ""]
     for it in items:
-        lines.append(f"[{it['n']}] {it['title']} (themes: {', '.join(it['themes']) or '-'}; "
+        lines.append(f"[{it['n']}] {it['title']} (type: {it['doc_type'] or '-'}; "
                      f"analyst: {it['analyst']})\n{it['summary'][:1200]}\n")
     return _chat(REPORT_PROMPT, "\n".join(lines)[: config.LLM_MAX_CHARS * 2], json_mode=False).strip()
 
@@ -305,7 +291,7 @@ def test_connection() -> dict:
 
 
 # ----------------------------------------------------------------- fake mode
-def _fake_answer(title: str, text: str, themes: list[str]) -> dict:
+def _fake_answer(title: str, text: str) -> dict:
     """LLM_FAKE: plausible answer exercising every filter path."""
     words = text.split()
     quote = " ".join(words[:8]) if words else ""
@@ -314,8 +300,8 @@ def _fake_answer(title: str, text: str, themes: list[str]) -> dict:
         if f.ai and f.values:
             first = sorted(f.values, key=lambda v: v.position)[0]
             metadata[f.name] = [{"value": first.display, "confidence": 0.93, "evidence": quote}]
-    if "Domain" in metadata:
-        metadata["Domain"].append({"value": "InventedValue", "confidence": 0.99, "evidence": quote})  # not in referential
+    if "Vehicles" in metadata:
+        metadata["Vehicles"].append({"value": "InventedValue", "confidence": 0.99, "evidence": quote})  # not in referential
     if metadata:
         k = next(iter(metadata))
         metadata[k].append({"value": "Uncertain", "confidence": 0.4, "evidence": quote})          # low confidence
@@ -329,19 +315,18 @@ def _fake_answer(title: str, text: str, themes: list[str]) -> dict:
             "published_date": {"value": "2026-03-03", "confidence": 0.6, "evidence": "3 March 2026"},
             "source": None, "country": None, "companies": [],
         },
-        "themes": [{"value": themes[0], "confidence": 0.9}] if themes else [],
     }
 
 
 def _fake_report(items: list[dict], period_label: str) -> str:
-    themes: dict[str, int] = {}
+    types: dict[str, int] = {}
     for it in items:
-        for t in it["themes"] or ["Untagged"]:
-            themes[t] = themes.get(t, 0) + 1
-    top = sorted(themes.items(), key=lambda x: -x[1])[:5]
+        t = it["doc_type"] or "Unclassified"
+        types[t] = types.get(t, 0) + 1
+    top = sorted(types.items(), key=lambda x: -x[1])[:5]
     lines = ["## Executive summary",
              f"{len(items)} article(s) were validated over {period_label}. "
-             + (f"The most active themes were {', '.join(f'{t} ({n})' for t, n in top)}." if top else ""),
+             + (f"Breakdown by document type: {', '.join(f'{t} ({n})' for t, n in top)}." if top else ""),
              "", "## Key developments"]
     for it in items[:8]:
         first = (it["summary"].split(". ")[0] or it["title"]).strip().rstrip(".")

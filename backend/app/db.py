@@ -7,7 +7,7 @@ Tables
 - jobs       background job queue (capture + AI analysis)
 - events     audit trail of every action
 - reports    generated executive reports
-- settings   small key/value store (themes, toggles, round-robin pointer)
+- settings   small key/value store (toggles, round-robin pointer)
 """
 import json
 import sqlite3
@@ -48,8 +48,6 @@ CREATE TABLE IF NOT EXISTS links (
     metadata           TEXT NOT NULL DEFAULT '{}',   -- AntBox fields  {"Domain": ["..."]}
     metadata_ai        TEXT NOT NULL DEFAULT '{}',   -- AI proposal (to measure acceptance)
     info               TEXT NOT NULL DEFAULT '{}',   -- author, published_date, source, country, companies
-    themes             TEXT NOT NULL DEFAULT '[]',   -- dashboard-only tags (never exported)
-    themes_ai          TEXT NOT NULL DEFAULT '[]',
     ai_details         TEXT NOT NULL DEFAULT '{}',   -- confidence + evidence per value
     error              TEXT,
     locked_by          INTEGER REFERENCES users(id),
@@ -114,7 +112,7 @@ CREATE TABLE IF NOT EXISTS reports (
     title        TEXT NOT NULL,
     period_start TEXT NOT NULL,
     period_end   TEXT NOT NULL,
-    granularity  TEXT NOT NULL,      -- general, theme, user
+    granularity  TEXT NOT NULL,      -- general, doctype, user
     link_count   INTEGER NOT NULL,
     created_by   INTEGER REFERENCES users(id),
     created_at   TEXT NOT NULL,
@@ -131,7 +129,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
 TODO_STATUSES = ("queued", "processing", "to_review", "error")
 DONE_STATUSES = ("approved", "rejected", "duplicate")
-JSON_FIELDS = ("metadata", "metadata_ai", "info", "themes", "themes_ai", "ai_details")
+JSON_FIELDS = ("metadata", "metadata_ai", "info", "ai_details")
 
 
 def now() -> str:
@@ -172,7 +170,7 @@ def row_to_dict(row: sqlite3.Row | None, with_text: bool = False) -> dict | None
     d = dict(row)
     for f in JSON_FIELDS:
         if f in d:
-            d[f] = json.loads(d[f] or ("[]" if f.startswith("themes") else "{}"))
+            d[f] = json.loads(d[f] or "{}")
     if not with_text:
         d.pop("text", None)
     return d

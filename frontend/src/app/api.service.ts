@@ -24,7 +24,6 @@ export class ApiService {
   readonly userId = signal<number | null>(readStored());
   readonly users = signal<User[]>([]);
   readonly referential = signal<RefField[]>([]);
-  readonly themes = signal<string[]>([]);
   readonly me = computed(() => this.users().find((u) => u.id === this.userId()) ?? null);
   /** Live events from the server (SSE). */
   readonly events$ = new Subject<{ type: string; id?: number; status?: string; user?: string | null }>();
@@ -66,7 +65,6 @@ export class ApiService {
   bootstrap() {
     this.loadUsers();
     this.getReferential().subscribe((r) => this.referential.set(r.fields));
-    this.getSettings().subscribe((s) => this.themes.set(s.themes));
     this.connectLive();
   }
 
@@ -129,7 +127,7 @@ export class ApiService {
   links(f: LinkFilters, limit = 300): Observable<LinkPage> {
     let p = new HttpParams().set('assignee', f.assignee).set('state', f.state).set('sort', f.sort)
       .set('order', f.order).set('limit', limit);
-    if (f.theme) p = p.set('theme', f.theme);
+    if (f.doc_type) p = p.set('doc_type', f.doc_type);
     if (f.date_from) p = p.set('date_from', f.date_from);
     if (f.date_to) p = p.set('date_to', f.date_to);
     if (f.q) p = p.set('q', f.q);
@@ -137,7 +135,7 @@ export class ApiService {
   }
   link(id: number) { return this.get<Link>('/links/' + id); }
   linkText(id: number) { return this.get<{ text: string }>(`/links/${id}/text`); }
-  saveLink(id: number, body: Partial<Pick<Link, 'title' | 'summary_html' | 'metadata' | 'info' | 'themes'>>) {
+  saveLink(id: number, body: Partial<Pick<Link, 'title' | 'summary_html' | 'metadata' | 'info'>>) {
     return this.patch<Link & { rejected_values: Record<string, string[]> }>('/links/' + id, body);
   }
   approve(id: number) { return this.post<{ link: Link; registry_id: number }>(`/links/${id}/approve`); }
@@ -188,9 +186,6 @@ export class ApiService {
       .pipe(tap(() => this.getReferential().subscribe((r) => this.referential.set(r.fields))));
   }
   getSettings() { return this.get<Settings>('/settings'); }
-  setThemes(themes: string[]) {
-    return this.put<{ themes: string[] }>('/settings/themes', { themes }).pipe(tap((r) => this.themes.set(r.themes)));
-  }
   setSocial(enabled: boolean) { return this.put<Settings['social']>('/settings/social', { enabled }); }
   socialLogin(network: string) { return this.post<Settings['social']>(`/settings/social/login/${network}`); }
   testLlm() { return this.post<{ ok: boolean; mode: string; answer: string }>('/settings/llm/test'); }

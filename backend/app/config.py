@@ -74,21 +74,33 @@ NEAR_DUPLICATE_MAX_DISTANCE = int(os.getenv("NEAR_DUPLICATE_MAX_DISTANCE", "3"))
 STALE_WARNING_DAYS = int(os.getenv("STALE_WARNING_DAYS", "3"))
 STALE_CRITICAL_DAYS = int(os.getenv("STALE_CRITICAL_DAYS", "7"))
 
-# --- AntBox -------------------------------------------------------------------
+# --- AntBox import CSV --------------------------------------------------------
+# The CSV follows the AntBox connector template (one row per document):
+# File Name;URL;Check;Attachment Clearance Level;Attachment Co-redactor;Document type;Domain;
+# Attachment redactor;Meeting or Forum;Year;Parts/Modules;Optionnal;OperationType;Vehicles
 REFERENTIAL_FILE = Path(os.getenv("REFERENTIAL_FILE", DATA_DIR / "referentiel_antbox.txt"))
-AI_SKIPPED_FIELDS = _list("AI_SKIPPED_FIELDS", "Attachment redactor")   # never filled by the LLM
-REQUIRED_FIELDS = _list("REQUIRED_FIELDS", "Document type,Domain")     # needed before approval
+# CSV column -> field name in your referential file, when they differ
+FIELD_MAP = dict(
+    pair.split("=", 1) for pair in _list(
+        "FIELD_MAP", "Parts/Modules=Components/Sub-System,OperationType=Mission,Vehicles=Aircrafts")
+    if "=" in pair
+)
+# Columns filled by the LLM ("use by IA")
+AI_FIELDS = _list("AI_FIELDS", "Document type,Year,Parts/Modules,Optionnal,OperationType,Vehicles")
+# Columns never used ("Not used"): hidden in the dashboard, empty in the CSV
+UNUSED_FIELDS = _list("UNUSED_FIELDS", "Meeting or Forum")
+# Column filled automatically from the analyst's profile ("Automatic")
+REDACTOR_FIELD = os.getenv("REDACTOR_FIELD", "Attachment redactor")
+REQUIRED_FIELDS = _list("REQUIRED_FIELDS", "Document type")   # needed before approval
+# The two connector document types: the LLM picks one, social links default to the first
+DOCUMENT_TYPES = _list("DOCUMENT_TYPES", "Press articles / Social Network,Commercial Brochure / Manufacturer website")
+# Constant columns
+ANTBOX_CLEARANCE_LEVEL = os.getenv("ANTBOX_CLEARANCE_LEVEL", "Public")
+ANTBOX_CO_REDACTOR = os.getenv("ANTBOX_CO_REDACTOR", "Group: Co-Writer")
 CSV_SEPARATOR = os.getenv("CSV_SEPARATOR", ";")
 CSV_ENCODING = os.getenv("CSV_ENCODING", "utf-8-sig")
 CSV_MULTI_SEPARATOR = os.getenv("CSV_MULTI_SEPARATOR", "|")
 CSV_VALUES = os.getenv("CSV_VALUES", "label")     # "label" or "id"
-
-# --- Themes (dashboard-only tags, never exported) -----------------------------
-DEFAULT_THEMES = _list(
-    "DEFAULT_THEMES",
-    "Artificial Intelligence,Autonomy,Batteries & Energy,Cybersecurity,Defense,Drones,"
-    "Hydrogen,Manufacturing,Materials,Space,Sustainability,Maintenance",
-)
 
 # --- Shared social account ----------------------------------------------------
 SOCIAL_SESSION_FILE = Path(os.getenv("SOCIAL_SESSION_FILE", SECRETS_DIR / "social_session.json"))

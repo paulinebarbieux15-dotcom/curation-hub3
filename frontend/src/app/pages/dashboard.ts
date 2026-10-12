@@ -12,7 +12,7 @@ import { avatarColor, domainOf, download, errorMessage, initials, relativeTime }
 
 const FILTER_KEY = 'curation.filters';
 const DEFAULT_FILTERS: LinkFilters = {
-  assignee: 'me', state: 'todo', theme: '', date_from: '', date_to: '', q: '', sort: 'created_at', order: 'desc',
+  assignee: 'me', state: 'todo', doc_type: '', date_from: '', date_to: '', q: '', sort: 'created_at', order: 'desc',
 };
 
 function storedFilters(): LinkFilters {
@@ -91,9 +91,9 @@ function storedFilters(): LinkFilters {
             <button [class.on]="f().state === o.v" (click)="set('state', o.v)">{{ o.l }}</button>
           }
         </div>
-        <select [ngModel]="f().theme" (ngModelChange)="set('theme', $event)" aria-label="Theme">
-          <option value="">All themes</option>
-          @for (t of api.themes(); track t) { <option [value]="t">{{ t }}</option> }
+        <select [ngModel]="f().doc_type" (ngModelChange)="set('doc_type', $event)" aria-label="Document type">
+          <option value="">All document types</option>
+          @for (t of docTypes(); track t) { <option [value]="t">{{ t }}</option> }
         </select>
         <label class="date-range">
           <input type="date" [ngModel]="f().date_from" (ngModelChange)="set('date_from', $event)" aria-label="From" />
@@ -137,7 +137,7 @@ function storedFilters(): LinkFilters {
               <th class="cb"><input type="checkbox" [checked]="allChecked()" (change)="toggleAll()" aria-label="Select all" /></th>
               <th class="sortable" (click)="sortBy('status')">Status {{ arrow('status') }}</th>
               <th class="sortable" (click)="sortBy('title')">Link {{ arrow('title') }}</th>
-              <th>Themes</th>
+              <th>Document type</th>
               <th class="sortable" (click)="sortBy('assignee')">Assignee {{ arrow('assignee') }}</th>
               <th class="sortable" (click)="sortBy('created_at')">Added {{ arrow('created_at') }}</th>
               <th></th>
@@ -163,8 +163,8 @@ function storedFilters(): LinkFilters {
                     @if (l.error && l.status !== 'error') { <span class="tag warn" [title]="l.error">retrying</span> }
                   </div>
                 </td>
-                <td><div class="chips nowrap">@for (t of l.themes.slice(0, 2); track t) { <span class="chip xs">{{ t }}</span> }
-                  @if (l.themes.length > 2) { <span class="muted small">+{{ l.themes.length - 2 }}</span> }</div></td>
+                <td>@if (docType(l); as d) { <span class="chip xs" [class.press]="isPress(d)">{{ shortType(d) }}</span> }
+                  @else { <span class="muted small">—</span> }</td>
                 <td>
                   @if (l.assignee_id) {
                     <span class="row gap-s"><span class="avatar xs" [style.background]="color(l.assignee_id)">{{ ini(l.assignee_name) }}</span>{{ l.assignee_name }}</span>
@@ -224,9 +224,13 @@ export class Dashboard implements OnInit, OnDestroy {
   allChecked = computed(() => this.links().length > 0 && this.links().every((l) => this.selected().has(l.id)));
   filtersActive = computed(() => {
     const f = this.f();
-    return !!(f.theme || f.date_from || f.date_to || f.q);
+    return !!(f.doc_type || f.date_from || f.date_to || f.q);
   });
 
+  docTypes = computed(() => this.api.referential().find((f) => f.name === 'Document type')?.values.map((v) => v.label) ?? []);
+  docType = (l: Link) => (l.metadata?.['Document type'] || [])[0] || '';
+  isPress = (d: string) => /press|social/i.test(d);
+  shortType = (d: string) => (/press|social/i.test(d) ? 'Press / Social' : /brochure|manufacturer/i.test(d) ? 'Brochure / Manufacturer' : d);
   label = (s: Link['status']) => STATUS_LABEL[s];
   rel = relativeTime;
   domain = domainOf;
@@ -279,12 +283,12 @@ export class Dashboard implements OnInit, OnDestroy {
     this.refresh();
   }
   reset() {
-    this.f.update((f) => ({ ...f, theme: '', date_from: '', date_to: '', q: '' }));
+    this.f.update((f) => ({ ...f, doc_type: '', date_from: '', date_to: '', q: '' }));
     this.set('q', '');
   }
   quick(assignee: string) {
     this.f.update((f) => ({ ...f, assignee, state: 'todo' }));
-    this.set('theme', '');
+    this.set('doc_type', '');
   }
   sortBy(col: string) {
     const f = this.f();

@@ -368,3 +368,6 @@ kbd {
   .grid-2 { grid-template-columns: 1fr; } .span-2 { grid-column: auto; }
 }
 @media (max-width: 560px) { .widgets { grid-template-columns: 1fr; } .nav a { padding: 6px 8px; } .kbd-btn { display: none; } }
+
+.chip.press { background: var(--info-soft); border-color: transparent; }
+.tag.ai-tag { background: var(--accent-soft); color: var(--accent); border-color: transparent; }

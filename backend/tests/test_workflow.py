@@ -47,15 +47,18 @@ def test_anti_duplicates_in_preview_and_ingest(client, users):
 
 def test_full_flow_ai_fill_review_approve_registry_exports(client, users):
     alice = users[0]
+    client.patch(f"/api/users/{alice}", json={"antbox_redactor": "Redacteur_002"})
     client.post("/api/ingest", json={"urls": ["https://press.com/drone-battery"], "mode": "me"}, headers=as_user(alice))
     assert worker.drain() == 1
     link = client.get("/api/links/1").json()
     assert link["status"] == "to_review"
-    assert link["metadata"]["Document type"]               # confident, evidenced
+    assert link["metadata"]["Document type"] == ["Press articles / Social Network"]
+    assert link["metadata"]["Vehicles"]                    # confident, evidenced
     assert "InventedValue" not in str(link["metadata"])    # not in referential
+    assert not link["metadata"].get("Domain")              # not an AI column
     assert link["info"]["author"] == "Jane Doe"
     assert link["info"]["published_date"] is None          # low confidence -> left empty
-    assert link["themes"]
+    assert "themes" not in link
     assert any(not d["kept"] for v in link["ai_details"].values() for d in v)
 
     # soft lock: Bob cannot edit while Alice has the panel open
@@ -64,7 +67,7 @@ def test_full_flow_ai_fill_review_approve_registry_exports(client, users):
 
     r = client.patch("/api/links/1", headers=as_user(alice), json={
         "title": "Drone battery", "summary_html": "<p>Edited <b>summary</b><script>x</script></p>",
-        "metadata": {**link["metadata"], "Domain": [link["metadata"]["Domain"][0]] if link["metadata"].get("Domain") else []},
+        "metadata": {**link["metadata"], "Domain": ["Domaine_01"]},
     })
     assert r.status_code == 200 and "<script>" not in r.json()["summary_html"]
 
@@ -74,9 +77,17 @@ def test_full_flow_ai_fill_review_approve_registry_exports(client, users):
     assert len(reg) == 1 and reg[0]["operator_name"] == "Alice"
     assert client.get(f"/api/registry/{reg[0]['id']}/pdf").status_code == 200
     csv_text = client.get(f"/api/registry/{reg[0]['id']}/csv").content.decode("utf-8-sig")
-    header = next(csv.reader(io.StringIO(csv_text), delimiter=";"))
-    assert "summary" in header and "Document type" in header and not any("theme" in h.lower() for h in header)
-    assert "Edited summary" in csv_text and "<b>" not in csv_text
+    rows = list(csv.reader(io.StringIO(csv_text), delimiter=";"))
+    assert rows[0] == ["File Name", "URL", "Check", "Attachment Clearance Level", "Attachment Co-redactor",
+                       "Document type", "Domain", "Attachment redactor", "Meeting or Forum", "Year",
+                       "Parts/Modules", "Optionnal", "OperationType", "Vehicles"]
+    r = dict(zip(rows[0], rows[1]))
+    assert r["File Name"].endswith(".pdf") and r["URL"] == "https://press.com/drone-battery"
+    assert r["Check"] == "" and r["Meeting or Forum"] == ""
+    assert r["Attachment Clearance Level"] == "Public" and r["Attachment Co-redactor"] == "Group: Co-Writer"
+    assert r["Document type"] == "Press articles / Social Network" and r["Domain"] == "Domaine_01"
+    assert r["Attachment redactor"] == "Redacteur_002"     # automatic: approving analyst's profile
+    assert r["Year"] and r["Vehicles"]
     assert client.get("/api/registry/verify").json()["ok"]
 
     # immutability enforced by the database
@@ -84,6 +95,9 @@ def test_full_flow_ai_fill_review_approve_registry_exports(client, users):
     with pytest.raises(sqlite3.DatabaseError):
         with db.tx() as con:
             con.execute("UPDATE registry SET title='hacked'")
+
+    pkg = zipfile.ZipFile(io.BytesIO(client.get("/api/export?approved=true").content)).namelist()
+    assert "connector_press_article.csv" in pkg and any(n.endswith(".pdf") for n in pkg)
 
     both = client.get("/api/links/1/export?format=both")
     names = zipfile.ZipFile(io.BytesIO(both.content)).namelist()
@@ -109,7 +123,7 @@ def test_report_includes_links_and_summaries(client, users):
     worker.drain()
     for i in (1, 2, 3):
         assert client.post(f"/api/links/{i}/approve", headers=as_user(users[0])).status_code == 200
-    for gran in ("general", "theme", "user"):
+    for gran in ("general", "doctype", "user"):
         r = client.post("/api/reports", json={"period": "7d", "granularity": gran}, headers=as_user(users[0])).json()
         assert r["link_count"] == 3
         assert "https://r.com/0" in r["markdown"] and "## Executive summary" in r["markdown"]
@@ -154,8 +168,8 @@ def test_filters(client, users):
     assert client.get("/api/links?assignee=global").json()["total"] == 1
     client.post("/api/links/1/approve", headers=as_user(a))
     assert client.get("/api/links?state=done").json()["total"] == 1
-    theme = client.get("/api/links/2").json()["themes"][0]
-    assert client.get(f"/api/links?state=all&theme={theme}").json()["total"] == 3
+    assert client.get("/api/links?state=all&doc_type=Press articles / Social Network").json()["total"] == 3
+    assert client.get("/api/links?state=all&doc_type=Commercial Brochure / Manufacturer website").json()["total"] == 0
     assert client.get("/api/links?state=all&date_from=2000-01-01&date_to=2000-01-02").json()["total"] == 0
 
 

@@ -63,7 +63,7 @@ export class CommandPalette {
     this.search$.pipe(
       debounceTime(200),
       switchMap((q) => q.trim().length < 2 ? of({ items: [] as Link[], total: 0 }) :
-        this.api.links({ assignee: 'all', state: 'all', theme: '', date_from: '', date_to: '', q, sort: 'created_at', order: 'desc' }, 8)
+        this.api.links({ assignee: 'all', state: 'all', doc_type: '', date_from: '', date_to: '', q, sort: 'created_at', order: 'desc' }, 8)
           .pipe(catchError(() => of({ items: [] as Link[], total: 0 })))),
     ).subscribe((r) => this.found.set(r.items));
   }

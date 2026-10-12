@@ -13,9 +13,23 @@ from .urls import clean_url, domain_of, extract_urls, hamming, is_valid_url, nor
 log = logging.getLogger("curation")
 
 
-# ----------------------------------------------------------------- themes
-def themes(con) -> list[str]:
-    return db.get_setting(con, "themes", None) or list(config.DEFAULT_THEMES)
+# ----------------------------------------------------------------- automatic fields
+def redactor_values(redactor: str | None) -> list[str]:
+    """'Attachment redactor' column: the analyst's AntBox redactor, if it is in the referential."""
+    if not redactor:
+        return []
+    from . import referential
+    ok, _ = referential.validate(config.REDACTOR_FIELD, [redactor])
+    return ok
+
+
+def default_document_type(url: str) -> list[str]:
+    """Social network posts are always 'Press articles / Social Network'."""
+    from . import referential
+    if social.is_social(url) and config.DOCUMENT_TYPES:
+        ok, _ = referential.validate("Document type", [config.DOCUMENT_TYPES[0]])
+        return ok or [config.DOCUMENT_TYPES[0]]
+    return []
 
 
 # ----------------------------------------------------------------- preview / ingest
@@ -179,7 +193,6 @@ def process(link_id: int) -> str:
                 if hamming(fingerprint, r["simhash"]) <= config.NEAR_DUPLICATE_MAX_DISTANCE:
                     near = r["id"]
                     break
-        theme_list = themes(con)
         examples = few_shot(con, cap.title, cap.text)
         assignee = row["assignee_id"]
         redactor = None
@@ -187,24 +200,21 @@ def process(link_id: int) -> str:
             u = con.execute("SELECT antbox_redactor, name FROM users WHERE id=?", (assignee,)).fetchone()
             redactor = u and (u["antbox_redactor"] or None)
 
-    ai = llm.analyze(cap.title, cap.text, url, theme_list, examples)
+    ai = llm.analyze(cap.title, cap.text, url, examples)
 
     metadata = dict(ai["metadata"])
-    if redactor:
-        from . import referential
-        for skipped in config.AI_SKIPPED_FIELDS:
-            ok, _ = referential.validate(skipped, [redactor])
-            if ok:
-                metadata[skipped] = ok
+    if not metadata.get("Document type"):
+        metadata["Document type"] = default_document_type(url)
+    if redactor_values(redactor):
+        metadata[config.REDACTOR_FIELD] = redactor_values(redactor)
     with db.tx() as con:
         con.execute(
             """UPDATE links SET status='to_review', title=?, text=?, pdf_file=?, final_url=?, canonical_url=?,
-               simhash=?, near_duplicate_of=?, summary_html=?, metadata=?, metadata_ai=?, info=?, themes=?,
-               themes_ai=?, ai_details=?, error=NULL, updated_at=? WHERE id=?""",
+               simhash=?, near_duplicate_of=?, summary_html=?, metadata=?, metadata_ai=?, info=?,
+               ai_details=?, error=NULL, updated_at=? WHERE id=?""",
             (ai["title"], cap.text, cap.pdf_file, final_norm, canon_norm, fingerprint, near, ai["summary_html"],
              json.dumps(metadata, ensure_ascii=False), json.dumps(ai["metadata"], ensure_ascii=False),
-             json.dumps(ai["info"], ensure_ascii=False), json.dumps(ai["themes"], ensure_ascii=False),
-             json.dumps(ai["themes"], ensure_ascii=False), json.dumps(ai["details"], ensure_ascii=False),
+             json.dumps(ai["info"], ensure_ascii=False), json.dumps(ai["details"], ensure_ascii=False),
              db.now(), link_id))
         dropped = sum(1 for v in ai["details"].values() for d in v if not d["kept"])
         db.log(con, "ai_filled", link_id, None,

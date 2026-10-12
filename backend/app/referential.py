@@ -49,9 +49,20 @@ class Field:
     multi: bool
     values: list[Value] = field(default_factory=list)
 
+    source_name: str = ""     # name in the referential file, when it differs from the CSV column
+
     @property
     def ai(self) -> bool:
-        return self.name not in config.AI_SKIPPED_FIELDS
+        return self.name in config.AI_FIELDS
+
+    @property
+    def mode(self) -> str:
+        """ai (LLM), auto (from the analyst profile), unused, or manual."""
+        if self.name in config.UNUSED_FIELDS:
+            return "unused"
+        if self.name == config.REDACTOR_FIELD:
+            return "auto"
+        return "ai" if self.ai else "manual"
 
 
 def key(text: str) -> str:
@@ -105,10 +116,33 @@ def parse(content: str) -> list[Field]:
     return list(fields.values())
 
 
+DOCUMENT_TYPE = "Document type"
+
+
+def _adapt(fields: list[Field]) -> list[Field]:
+    """Rename fields to the AntBox CSV column names (FIELD_MAP) and restrict
+    Document type to the connector document types."""
+    reverse = {src.lower(): col for col, src in config.FIELD_MAP.items()}
+    for f in fields:
+        col = reverse.get(f.name.lower())
+        if col:
+            f.source_name, f.name = f.name, col
+    doc = next((f for f in fields if f.name == DOCUMENT_TYPE), None)
+    if config.DOCUMENT_TYPES:
+        if doc is None:
+            doc = Field(name=DOCUMENT_TYPE, id="", multi=False)
+            fields.insert(0, doc)
+        by_key = {key(v.label): v for v in doc.values}
+        doc.values = [by_key.get(key(t)) or Value(label=t, id="", position=i)
+                      for i, t in enumerate(config.DOCUMENT_TYPES)]
+        doc.multi = False
+    return fields
+
+
 @lru_cache(maxsize=1)
 def _load(path: str, mtime: float) -> tuple[Field, ...]:
     from pathlib import Path
-    return tuple(parse(decode(Path(path).read_bytes())))
+    return tuple(_adapt(parse(decode(Path(path).read_bytes()))))
 
 
 def fields() -> list[Field]:
@@ -179,7 +213,8 @@ def as_json() -> list[dict]:
     """Shape sent to the dashboard."""
     return [
         {
-            "name": f.name, "id": f.id, "multi": f.multi, "ai": f.ai,
+            "name": f.name, "id": f.id, "multi": f.multi, "ai": f.ai, "mode": f.mode,
+            "source_name": f.source_name,
             "required": f.name in config.REQUIRED_FIELDS,
             "values": [{"label": v.label, "display": v.display, "id": v.id}
                        for v in sorted(f.values, key=lambda v: v.display.lower())],
@@ -197,4 +232,5 @@ if __name__ == "__main__":
         print("No metadata recognised. Check the file (columns, separator).")
     for f in result:
         sample = ", ".join(v.display for v in f.values[:3])
-        print(f"- {f.name}: {len(f.values)} values ({'multi' if f.multi else 'single'}) e.g. {sample}")
+        src = f" (file: {f.source_name})" if f.source_name else ""
+        print(f"- {f.name}{src} [{f.mode}]: {len(f.values)} values ({'multi' if f.multi else 'single'}) e.g. {sample}")

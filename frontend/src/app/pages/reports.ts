@@ -76,7 +76,7 @@ export class Reports implements OnInit {
   periods = [{ v: '7d', l: 'Last 7 days' }, { v: '30d', l: 'Last month' }, { v: 'custom', l: 'Custom' }];
   grans = [
     { v: 'general', l: 'General', h: 'One list' },
-    { v: 'theme', l: 'By theme', h: 'Grouped by theme' },
+    { v: 'doctype', l: 'By document type', h: 'Grouped by document type' },
     { v: 'user', l: 'By user', h: 'Grouped by analyst' },
   ];
   period = '7d';

@@ -11,7 +11,9 @@ import { display } from './util';
         <span class="field-name">{{ field().name }}</span>
         @if (field().required) { <span class="req" title="Required before approval">required</span> }
         <span class="muted small">{{ field().multi ? 'multi' : 'single' }}</span>
-        @if (!field().ai) { <span class="muted small" title="Never filled by the AI">manual</span> }
+        @if (field().mode === 'auto') { <span class="tag" title="Filled with the AntBox redactor of the approving analyst (profile)">automatic</span> }
+        @else if (field().mode === 'manual') { <span class="tag" title="Not filled by the AI — optional">manual</span> }
+        @else { <span class="tag ai-tag" title="Filled by the AI when certain">AI</span> }
       </div>
       <div class="chips">
         @for (v of values(); track v) {
@@ -21,7 +23,7 @@ import { display } from './util';
             @if (!disabled()) { <button type="button" class="chip-x" (click)="remove(v)" [attr.aria-label]="'Remove ' + show(v)">×</button> }
           </span>
         }
-        @if (!values().length) { <span class="empty-hint">{{ field().ai ? 'Left empty (AI not certain)' : 'Empty' }}</span> }
+        @if (!values().length) { <span class="empty-hint">{{ field().mode === 'ai' ? 'Left empty (AI not certain)' : field().mode === 'auto' ? 'Set on approval from the analyst profile' : 'Empty' }}</span> }
       </div>
       @if (dropped().length && !disabled()) {
         <div class="suggestions">

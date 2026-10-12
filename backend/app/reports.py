@@ -1,7 +1,7 @@
 """Executive reports over a period.
 
 period: '7d', '30d' (1 month) or 'custom' (start/end dates)
-granularity: 'general' (one list), 'theme' (grouped by theme), 'user' (grouped by analyst)
+granularity: 'general' (one list), 'doctype' (grouped by document type), 'user' (grouped by analyst)
 
 The LLM writes the synthesis (citing articles as [n]); the list of links with their
 summaries is appended by code, so every link is always present and correct.
@@ -46,12 +46,12 @@ def period_bounds(period: str, start: str | None = None, end: str | None = None)
 
 def _items(con, start: datetime, end: datetime) -> list[dict]:
     rows = con.execute(
-        "SELECT l.id, l.title, l.url, l.summary_html, l.themes, l.approved_at, u.name AS analyst "
+        "SELECT l.id, l.title, l.url, l.summary_html, l.metadata, l.approved_at, u.name AS analyst "
         "FROM links l LEFT JOIN users u ON u.id = l.approved_by "
         "WHERE l.status='approved' AND l.approved_at BETWEEN ? AND ? ORDER BY l.approved_at",
         (start.isoformat(timespec="seconds"), end.isoformat(timespec="seconds"))).fetchall()
     return [{"n": i + 1, "id": r["id"], "title": r["title"] or r["url"], "url": r["url"],
-             "summary": llm.html_to_text(r["summary_html"] or ""), "themes": json.loads(r["themes"] or "[]"),
+             "summary": llm.html_to_text(r["summary_html"] or ""), "doc_type": ((json.loads(r["metadata"] or "{}").get("Document type") or [""])[0]),
              "analyst": r["analyst"] or "Unknown", "approved_at": r["approved_at"]} for i, r in enumerate(rows)]
 
 
@@ -71,11 +71,10 @@ def _links_section(items: list[dict], granularity: str) -> str:
         return f"- **[{it['n']}] [{_md_escape(it['title'])}]({it['url']})** — {s}"
 
     out = ["\n\n## Links and summaries"]
-    if granularity == "theme":
+    if granularity == "doctype":
         groups: dict[str, list] = {}
         for it in items:
-            for t in it["themes"] or ["Untagged"]:
-                groups.setdefault(t, []).append(it)
+            groups.setdefault(it["doc_type"] or "Unclassified", []).append(it)
         for t in sorted(groups):
             out += ["", f"### {t} ({len(groups[t])})"] + [block(it) for it in groups[t]]
     elif granularity == "user":
@@ -94,12 +93,12 @@ def _md_escape(s: str) -> str:
 
 
 def _stats_section(items: list[dict], granularity: str) -> str:
-    if granularity == "theme":
+    if granularity == "doctype":
         counts: dict[str, int] = {}
         for it in items:
-            for t in it["themes"] or ["Untagged"]:
-                counts[t] = counts.get(t, 0) + 1
-        head = "| Theme | Articles |\n|---|---|"
+            t = it["doc_type"] or "Unclassified"
+            counts[t] = counts.get(t, 0) + 1
+        head = "| Document type | Articles |\n|---|---|"
     elif granularity == "user":
         counts = {}
         for it in items:
@@ -113,8 +112,8 @@ def _stats_section(items: list[dict], granularity: str) -> str:
 
 def generate(period: str, granularity: str, user_id: int | None, start: str | None = None,
              end: str | None = None, title: str | None = None) -> dict:
-    if granularity not in ("general", "theme", "user"):
-        raise ValueError("granularity must be general, theme or user")
+    if granularity not in ("general", "doctype", "user"):
+        raise ValueError("granularity must be general, doctype or user")
     s, e, label = period_bounds(period, start, end)
     with db.tx() as con:
         items = _items(con, s, e)
@@ -124,7 +123,7 @@ def generate(period: str, granularity: str, user_id: int | None, start: str | No
     else:
         synthesis = "## Executive summary\nNo article was validated over this period."
     body = synthesis + _stats_section(items, granularity) + (_links_section(items, granularity) if items else "")
-    markdown_text = f"# {title}\n\n*{len(items)} validated article(s) · {label} · grouped by {granularity}*\n\n{body}\n"
+    markdown_text = f"# {title}\n\n*{len(items)} validated article(s) · {label} · { {"general": "general view", "doctype": "grouped by document type", "user": "grouped by analyst"}[granularity] }*\n\n{body}\n"
 
     html_body = md.markdown(markdown_text, extensions=["tables", "sane_lists"])
     page = (f"<!doctype html><html><head><meta charset='utf-8'><title>{html.escape(title)}</title>"
