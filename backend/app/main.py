@@ -769,6 +769,10 @@ def dashboard(path: str):
     if not index.exists():
         raise HTTPException(404, "Dashboard not built: run `npx ng serve` in frontend/ and open http://localhost:4200")
     f = (root / path).resolve()
-    if path and f.is_file() and root in f.parents:
-        return FileResponse(f)
-    return FileResponse(index)
+    if path and f.is_file() and root in f.parents and f.name != "index.html":
+        # hashed bundles (main-XXXX.js) never change: cache them; a new version has a new name
+        return FileResponse(f, headers={"Cache-Control": "public, max-age=31536000, immutable"})
+    if path.endswith((".js", ".css", ".map", ".ico", ".png", ".svg", ".woff2")):
+        raise HTTPException(404, "File not found")   # an old bundle: never answer with index.html
+    # index.html is never cached, so the browser always loads the current version after an update
+    return FileResponse(index, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
