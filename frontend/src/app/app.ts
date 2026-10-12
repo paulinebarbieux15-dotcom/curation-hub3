@@ -10,7 +10,7 @@ import { Toasts } from './ui/toast.service';
   imports: [RouterOutlet, RouterLink, RouterLinkActive, ProfileSwitcher, Toasts, CommandPalette],
   template: `
     <header class="topbar">
-      <a class="brand" routerLink="/"><span class="logo">◆</span> Curation<span>Hub</span></a>
+      <a class="brand" routerLink="/"><span class="logo">◆</span> ETCA</a>
       <nav class="nav">
         <a routerLink="/" routerLinkActive="on" [routerLinkActiveOptions]="{ exact: true }">Dashboard</a>
         <a routerLink="/registry" routerLinkActive="on">Registry</a>

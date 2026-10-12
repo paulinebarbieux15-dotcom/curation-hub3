@@ -1,4 +1,4 @@
-"""Curation Hub REST API.
+"""ETCA technology watch — REST API.
 
 Run (from backend/):   uvicorn app.main:app --reload
 Dashboard:             http://localhost:8000
@@ -41,7 +41,7 @@ async def lifespan(_app):
     worker.stop()
 
 
-app = FastAPI(title="Curation Hub", version="2.0.0", lifespan=lifespan,
+app = FastAPI(title="ETCA", version="2.0.0", lifespan=lifespan,
               description="Link ingestion, capture, AI auto-fill, validation, immutable registry and reporting.")
 app.add_middleware(CORSMiddleware, allow_origins=config.CORS_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 

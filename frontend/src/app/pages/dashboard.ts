@@ -15,9 +15,15 @@ const DEFAULT_FILTERS: LinkFilters = {
   assignee: 'me', state: 'todo', doc_type: '', date_from: '', date_to: '', q: '', sort: 'created_at', order: 'desc',
 };
 
+/** Only the views (Me/All/Global, To do/Done/All, sort) are remembered;
+ *  dates, search and document type always start empty so no link is hidden by an old filter. */
+const REMEMBERED: (keyof LinkFilters)[] = ['assignee', 'state', 'sort', 'order'];
+
 function storedFilters(): LinkFilters {
   try {
-    return { ...DEFAULT_FILTERS, ...JSON.parse(localStorage.getItem(FILTER_KEY) || '{}') };
+    const saved = JSON.parse(localStorage.getItem(FILTER_KEY) || '{}');
+    const kept = Object.fromEntries(REMEMBERED.filter((k) => saved[k]).map((k) => [k, saved[k]]));
+    return { ...DEFAULT_FILTERS, ...kept };
   } catch {
     return { ...DEFAULT_FILTERS };
   }
@@ -278,7 +284,10 @@ export class Dashboard implements OnInit, OnDestroy {
 
   set<K extends keyof LinkFilters>(key: K, value: LinkFilters[K]) {
     this.f.update((f) => ({ ...f, [key]: value }));
-    try { localStorage.setItem(FILTER_KEY, JSON.stringify(this.f())); } catch { /* ignore */ }
+    try {
+      const f = this.f();
+      localStorage.setItem(FILTER_KEY, JSON.stringify(Object.fromEntries(REMEMBERED.map((k) => [k, f[k]]))));
+    } catch { /* ignore */ }
     this.cursor.set(-1);
     this.refresh();
   }

@@ -1,4 +1,4 @@
-# Curation Hub
+# ETCA — technology watch
 
 Single-page app that replaces the shared Google Sheet for technology watch:
 
