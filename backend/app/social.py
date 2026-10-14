@@ -25,48 +25,71 @@ _LOGGED_OUT_SIGNS = ("/login", "/signin", "/authwall", "/checkpoint", "/uas/logi
 # How to log in to each network. CSS selectors target the login form fields:
 # if a network changes its page, this is the place to update.
 NETWORKS: dict[str, dict] = {
+    # Each selector lists several variants (comma = "any of"): networks change their pages often.
     "linkedin": {
         "domains": ["linkedin.com", "lnkd.in"],
         "login_page": "https://www.linkedin.com/login",
         "steps": [
-            ("fill", "#username", "username"),
-            ("fill", "#password", "password"),
-            ("click", "button[type=submit]"),
+            ("fill", "#username, input[name=session_key], input[autocomplete=username]", "username"),
+            ("fill", "#password, input[name=session_password], input[type=password]", "password"),
+            ("click", "button[type=submit], button[data-litms-control-urn='login-submit']"),
         ],
-        "otp_field": "input[name=pin], #input__phone_verification_pin",
+        "otp_field": "input[name=pin], #input__phone_verification_pin, input[autocomplete=one-time-code]",
     },
     "x": {
         "domains": ["x.com", "twitter.com", "t.co"],
         "login_page": "https://x.com/i/flow/login",
         "steps": [
-            ("fill", "input[autocomplete=username]", "username"),
-            ("click", "button:has-text('Next'), button:has-text('Suivant')"),
-            ("fill", "input[name=password]", "password"),
-            ("click", "button[data-testid=LoginForm_Login_Button]"),
+            ("fill", "input[autocomplete=username], input[name=text]", "username"),
+            ("click", "button:has-text('Next'), button:has-text('Suivant'), div[role=button]:has-text('Next'), div[role=button]:has-text('Suivant')"),
+            ("fill", "input[name=password], input[type=password]", "password"),
+            ("click", "button[data-testid=LoginForm_Login_Button], div[data-testid=LoginForm_Login_Button]"),
         ],
-        "otp_field": "input[data-testid=ocfEnterTextTextInput]",
+        "otp_field": "input[data-testid=ocfEnterTextTextInput], input[autocomplete=one-time-code]",
     },
     "facebook": {
         "domains": ["facebook.com"],
         "login_page": "https://www.facebook.com/login",
         "steps": [
-            ("fill", "#email", "username"),
-            ("fill", "#pass", "password"),
-            ("click", "button[name=login]"),
+            ("fill", "#email, input[name=email]", "username"),
+            ("fill", "#pass, input[name=pass], input[type=password]", "password"),
+            ("click", "button[name=login], button[type=submit]"),
         ],
-        "otp_field": "input[name=approvals_code]",
+        "otp_field": "input[name=approvals_code], input[autocomplete=one-time-code]",
     },
     "instagram": {
         "domains": ["instagram.com"],
         "login_page": "https://www.instagram.com/accounts/login/",
         "steps": [
-            ("fill", "input[name=username]", "username"),
-            ("fill", "input[name=password]", "password"),
-            ("click", "button[type=submit]"),
+            ("fill", "input[name=username], input[name=email], input[autocomplete*=username], "
+                     "form input[type=text]", "username"),
+            ("fill", "input[name=password], input[name=pass], input[type=password]", "password"),
+            ("click", "button[type=submit], div[role=button]:has-text('Log in'), "
+                      "div[role=button]:has-text('Se connecter'), button:has-text('Log in'), "
+                      "button:has-text('Se connecter')"),
         ],
-        "otp_field": "input[name=verificationCode]",
+        "otp_field": "input[name=verificationCode], input[name=approvals_code], input[autocomplete=one-time-code]",
     },
 }
+
+# Cookie / consent pop-ups shown before the login form (EU): accepted automatically.
+_CONSENT_BUTTONS = [
+    "Allow all cookies", "Autoriser tous les cookies", "Accept all", "Accept All", "Tout accepter",
+    "Accepter tout", "Accept all cookies", "Accepter tous les cookies", "Allow essential and optional cookies",
+    "Autoriser les cookies essentiels et optionnels", "Accept", "Accepter", "J'accepte", "I agree",
+]
+
+
+def dismiss_consent(page) -> None:
+    for label in _CONSENT_BUTTONS:
+        try:
+            btn = page.get_by_role("button", name=label, exact=True)
+            if btn.count() and btn.first.is_visible():
+                btn.first.click(timeout=3000)
+                page.wait_for_timeout(1000)
+                return
+        except Exception:
+            continue
 
 
 class SocialSessionError(Exception):
@@ -202,13 +225,15 @@ def auto_login(context, name: str) -> None:
     page = context.new_page()
     try:
         page.goto(r["login_page"], wait_until="domcontentloaded", timeout=config.CAPTURE_TIMEOUT_MS)
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(2500)
+        dismiss_consent(page)
         if not looks_logged_out(page.url):
             record_login(name, "already logged in")
             return
         for step in r["steps"]:
+            dismiss_consent(page)
             el = page.locator(step[1]).first
-            el.wait_for(state="visible", timeout=15000)
+            el.wait_for(state="visible", timeout=30000)
             if step[0] == "fill":
                 el.fill(cred[step[2]])
             else:

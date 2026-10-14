@@ -119,6 +119,7 @@ def capture(url: str, link_id: int) -> CaptureResult:
 
             page = context.new_page()
             _open(page, url)
+            social.dismiss_consent(page)
             if with_session and social.looks_logged_out(page.url):
                 if social.has_credentials(network):
                     social.auto_login(context, network)
