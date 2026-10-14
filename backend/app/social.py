@@ -230,17 +230,20 @@ def auto_login(context, name: str) -> None:
         if not looks_logged_out(page.url):
             record_login(name, "already logged in")
             return
+        logged_in = False
         for step in r["steps"]:
-            dismiss_consent(page)
-            el = page.locator(step[1]).first
-            el.wait_for(state="visible", timeout=30000)
+            el = _wait_for_field(page, step[1])
+            if el is None:          # the network went straight to the feed: already logged in
+                logged_in = True
+                break
             if step[0] == "fill":
                 el.fill(cred[step[2]])
             else:
                 el.click()
             page.wait_for_timeout(800)
-        _two_factor(page, r, cred, name)
-        _wait_logged_in(page, name)
+        if not logged_in:
+            _two_factor(page, r, cred, name)
+            _wait_logged_in(page, name)
         context.storage_state(path=str(config.SOCIAL_SESSION_FILE))
         protect_file()
         record_login(name, "logged in automatically")
@@ -320,6 +323,24 @@ def check_codes() -> None:
 if __name__ == "__main__":
     config.use_system_certificates()
     check_codes()
+
+
+def _wait_for_field(page, selector: str, timeout_s: float = 30):
+    """The field once visible, or None if the page left the login screen (already logged in).
+    Raises TimeoutError if neither happens."""
+    end = time.monotonic() + timeout_s
+    loc = page.locator(selector).first
+    while time.monotonic() < end:
+        dismiss_consent(page)
+        try:
+            if loc.is_visible():
+                return loc
+        except Exception:
+            pass
+        if not looks_logged_out(page.url):
+            return None
+        page.wait_for_timeout(700)
+    raise TimeoutError(f"login field not found ({selector.split(',')[0]})")
 
 
 def _failure_screenshot(page, name: str) -> str:
