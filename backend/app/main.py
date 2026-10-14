@@ -28,6 +28,7 @@ from .urls import extract_urls  # noqa: E402
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
 LOCK_TTL_S = 60
+NO_CACHE = "no-cache, no-store, must-revalidate"   # captures can be redone: never show an old file
 TODO = db.TODO_STATUSES
 
 
@@ -541,7 +542,8 @@ def link_pdf(link_id: int):
     p = exports.pdf_path(link)
     if not p:
         raise HTTPException(404, "No PDF captured yet")
-    return FileResponse(p, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{p.name}"'})
+    return FileResponse(p, media_type="application/pdf",
+                        headers={"Content-Disposition": f'inline; filename="{p.name}"', "Cache-Control": NO_CACHE})
 
 
 @app.get("/api/links/{link_id}/export", tags=["exports"])
@@ -554,8 +556,9 @@ def export_link(link_id: int, format: str = Query("both", pattern="^(pdf|csv|bot
     except FileNotFoundError as e:
         raise HTTPException(404, str(e)) from e
     if hasattr(content, "is_file"):
-        return FileResponse(content, media_type=media, filename=name)
-    return Response(content, media_type=media, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+        return FileResponse(content, media_type=media, filename=name, headers={"Cache-Control": NO_CACHE})
+    return Response(content, media_type=media,
+                    headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": NO_CACHE})
 
 
 @app.get("/api/export", tags=["exports"])

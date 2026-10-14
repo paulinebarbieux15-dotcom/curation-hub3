@@ -73,6 +73,7 @@ class CaptureResult:
     pdf_file: str          # file name in data/pdfs/
     final_url: str
     canonical_url: str
+    method: str = "page"   # page, x-embed or x-data
 
 
 def slug(text: str, length: int = 60) -> str:
@@ -109,12 +110,20 @@ def _error_page(page) -> bool:
         body = page.inner_text("body", timeout=3000)[:3000]
     except Exception:
         return False
-    return any(t in body for t in _ERROR_TEXTS) and len(body) < 2500
+    return any(t in body for t in _ERROR_TEXTS) and len(body) < 8000
 
 
 def _wait_for_post(page, url: str, network: str | None) -> None:
     """Wait until the post is displayed; reload when the network shows its error page (max 3 tries)."""
     selector = _READY_SELECTORS.get(network or "")
+    if network == "x":
+        # X: the post itself must be on the page, otherwise the fallback takes over
+        try:
+            page.wait_for_selector(selector, state="visible", timeout=25000)
+            page.wait_for_timeout(1500)
+            return
+        except Exception:
+            raise RuntimeError("X did not display the post (error page or blocked)") from None
     for attempt in range(3):
         if selector:
             try:
@@ -240,6 +249,7 @@ def capture(url: str, link_id: int) -> CaptureResult:
             _open(page, url)
             social.dismiss_consent(page)
             via_fallback = False
+            method = "page"
             try:
                 if with_session and social.looks_logged_out(page.url):
                     if social.has_credentials(network):
@@ -256,6 +266,7 @@ def capture(url: str, link_id: int) -> CaptureResult:
                 if fallback is None:
                     raise
                 page, via_fallback = fallback, True
+                method = "x-data" if "syndication" in page.url or page.url == "about:blank" else "x-embed"
 
             title = (page.title() or "").strip()
             text = page.evaluate(_JS_TEXT) or ""
@@ -281,7 +292,8 @@ def capture(url: str, link_id: int) -> CaptureResult:
             browser.close()
 
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
-    return CaptureResult(title=title, text=text, pdf_file=pdf_name, final_url=final_url, canonical_url=canonical)
+    return CaptureResult(title=title, text=text, pdf_file=pdf_name, final_url=final_url, canonical_url=canonical,
+                         method=method)
 
 
 def html_to_pdf(html: str, path) -> bool:

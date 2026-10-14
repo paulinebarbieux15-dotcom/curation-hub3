@@ -230,6 +230,9 @@ def process(link_id: int) -> str:
              json.dumps(ai["info"], ensure_ascii=False), json.dumps(ai["details"], ensure_ascii=False),
              db.now(), link_id))
         dropped = sum(1 for v in ai["details"].values() for d in v if not d["kept"])
+        if cap.method != "page":
+            db.log(con, "captured", link_id, None, {"x-embed": "PDF from the official embedded post (X blocked the page)",
+                                                    "x-data": "PDF built from the public post data (X blocked the page)"}[cap.method])
         db.log(con, "ai_filled", link_id, None,
                f"AI auto-fill; {dropped} uncertain value(s) left empty" + (f"; near-duplicate of #{near}" if near else ""))
     live.publish("link", id=link_id, status="to_review")
