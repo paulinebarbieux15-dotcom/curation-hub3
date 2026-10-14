@@ -332,14 +332,14 @@ export class LinkPanel implements OnDestroy {
   approve() {
     const l = this.link();
     if (!l || this.readonly()) return;
-    const missing = this.api.referential().filter((f) => f.required && !(this.metadata()[f.name] || []).length);
+    const missing = this.api.referential().filter((f) => f.required && f.mode !== 'auto' && !(this.metadata()[f.name] || []).length);
     if (missing.length) {
-      this.toast.error('Required field(s) empty: ' + missing.map((f) => f.name).join(', '));
+      this.toast.error('Mandatory metadata missing: ' + missing.map((f) => f.name).join(', '));
       return;
     }
     const doApprove = () => this.api.approve(l.id).subscribe({
       next: (r) => {
-        this.toast.success(`Approved — registry entry #${r.registry_id}`, { label: 'Undo', run: () => this.api.reopen(l.id).subscribe(() => this.changed.emit()) });
+        this.toast.success(`Approved — row ${r.connector_rows} added to the AntBox connector file`, { label: 'Undo', run: () => this.api.reopen(l.id).subscribe(() => this.changed.emit()) });
         this.changed.emit();
         this.navigate.emit(1);
       },

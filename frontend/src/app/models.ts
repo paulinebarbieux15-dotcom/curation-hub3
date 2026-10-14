@@ -141,6 +141,8 @@ export interface Report {
   html?: string;
 }
 
+export interface ConnectorInfo { file: string; rows: number; updated_at: string | null; archives: string[]; }
+
 export interface Settings {
   social: {
     enabled: boolean;
@@ -151,7 +153,8 @@ export interface Settings {
   };
   llm: { fake: boolean; configured: boolean; model: string; host: string; confidence_threshold: number; require_evidence: boolean };
   referential: { file: string; fields: number; required: string[] };
-  antbox_csv: { column: string; rule: string; referential_field: string | null; values: number }[];
+  antbox_csv: { column: string; rule: string; required: boolean; referential_field: string | null; values: number }[];
+  connector: ConnectorInfo;
   distribution: { queue_cap_per_user: number };
   notifications: { google_chat: boolean; digest_hour: number };
   csv: { separator: string; multi_separator: string; values: string };

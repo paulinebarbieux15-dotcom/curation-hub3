@@ -397,23 +397,26 @@ def approve(link_id: int, user: dict = Depends(require_user)):
         if link["status"] != "to_review":
             raise HTTPException(409, f"Only links 'to review' can be approved (this one is {link['status']}).")
         _check_lock(link, user)
-        missing = [f for f in config.REQUIRED_FIELDS
-                   if referential.get_field(f) and not (link["metadata"].get(f) or [])]
-        if missing:
-            raise HTTPException(422, f"Required field(s) empty: {', '.join(missing)}")
-        now = db.now()
+        meta = dict(link["metadata"])
         auto = pipeline.redactor_values(user.get("antbox_redactor"))
         if auto:   # 'Attachment redactor' = the analyst who validates
-            meta = {**link["metadata"], config.REDACTOR_FIELD: auto}
-            con.execute("UPDATE links SET metadata=? WHERE id=?", (json.dumps(meta, ensure_ascii=False), link_id))
+            meta[config.REDACTOR_FIELD] = auto
+        missing = [f for f in config.REQUIRED_FIELDS if referential.get_field(f) and not (meta.get(f) or [])]
+        if missing:
+            hint = (" (set your AntBox redactor in Settings → Profiles)"
+                    if config.REDACTOR_FIELD in missing else "")
+            raise HTTPException(422, f"Mandatory metadata missing: {', '.join(missing)}{hint}")
+        now = db.now()
+        con.execute("UPDATE links SET metadata=? WHERE id=?", (json.dumps(meta, ensure_ascii=False), link_id))
         con.execute("UPDATE links SET status='approved', approved_at=?, approved_by=?, locked_by=NULL, "
                     "locked_until=NULL, updated_at=? WHERE id=?", (now, user["id"], now, link_id))
         link = _link(con, link_id)
         entry = registry.append(con, link, user)
-        db.log(con, "approved", link_id, user["id"], f"registry entry #{entry['id']}")
+        rows = exports.connector_add(link)          # one more row in the AntBox connector file
+        db.log(con, "approved", link_id, user["id"], f"registry entry #{entry['id']}; connector row {rows}")
     live.publish("link", id=link_id, status="approved")
     live.publish("registry")
-    return {"link": link, "registry_id": entry["id"]}
+    return {"link": link, "registry_id": entry["id"], "connector_rows": rows}
 
 
 @app.post("/api/links/{link_id}/reject", tags=["validation"])
@@ -440,6 +443,8 @@ def reopen(link_id: int, user: dict = Depends(require_user)):
             raise HTTPException(409, "This link was never captured: use Retry instead")
         con.execute("UPDATE links SET status='to_review', updated_at=? WHERE id=?", (db.now(), link_id))
         db.log(con, "reopened", link_id, user["id"], f"was {link['status']}")
+        if link["status"] == "approved":
+            exports.connector_remove(link)          # no longer approved: row removed from the connector
     live.publish("link", id=link_id)
     return {"ok": True}
 
@@ -569,6 +574,46 @@ def export_many(ids: str = "", format: str = Query("both", pattern="^(pdf|csv|bo
         raise HTTPException(404, "Nothing to export")
     content, name = exports.bulk(links, format)
     return Response(content, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+# ================================================================= AntBox connector file
+@app.get("/api/connector", tags=["exports"])
+def connector_status():
+    return exports.connector_info()
+
+
+@app.get("/api/connector/csv", tags=["exports"])
+def connector_csv():
+    """The single AntBox connector CSV (one row per approved article)."""
+    return Response(exports.connector_bytes(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{config.CONNECTOR_CSV.name}"'})
+
+
+@app.get("/api/connector/package", tags=["exports"])
+def connector_package():
+    """The connector CSV + the PDF of every row, in one zip."""
+    content, name = exports.connector_package()
+    return Response(content, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.post("/api/connector/archive", tags=["exports"])
+def connector_archive(user: dict = Depends(require_user)):
+    """After importing into AntBox: keep a dated copy and start a new empty file."""
+    name = exports.connector_archive()
+    if not name:
+        raise HTTPException(409, "The connector file is already empty")
+    with db.tx() as con:
+        db.log(con, "connector_archived", None, user["id"], name)
+    live.publish("registry")
+    return {"archived": name}
+
+
+@app.get("/api/connector/archive/{name}", tags=["exports"])
+def connector_archived_file(name: str):
+    f = (config.CONNECTOR_DIR / "archive" / name).resolve()
+    if f.parent != (config.CONNECTOR_DIR / "archive").resolve() or not f.exists():
+        raise HTTPException(404, "File not found")
+    return FileResponse(f, filename=name, media_type="text/csv")
 
 
 # ================================================================= registry
@@ -722,6 +767,7 @@ def get_settings():
         "referential": {"file": config.find_referential().name, "fields": len(referential.fields()),
                         "required": config.REQUIRED_FIELDS},
         "antbox_csv": exports.column_rules(),
+        "connector": exports.connector_info(),
         "distribution": {"queue_cap_per_user": config.QUEUE_CAP_PER_USER},
         "notifications": {"google_chat": bool(config.GOOGLE_CHAT_WEBHOOK), "digest_hour": config.DIGEST_HOUR},
         "csv": {"separator": config.CSV_SEPARATOR, "multi_separator": config.CSV_MULTI_SEPARATOR, "values": config.CSV_VALUES},

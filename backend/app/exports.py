@@ -13,11 +13,14 @@ CSV columns (exact template order, ';' separated, one row per document):
   Meeting or Forum            empty                              (Not used)
   Year, Parts/Modules, Optionnal, OperationType, Vehicles   filled by the LLM from the referential
 
-A package holds one CSV per document type (connector_press_article.csv,
-connector_commercial_brochure.csv) plus every PDF.
+All approved articles go into ONE connector file, data/connector/antbox_connector.csv:
+approving an article adds its row (re-approving replaces it, reopening removes it).
+After an import into AntBox, the file can be archived and a new one started.
 """
 import csv
 import io
+import shutil
+import threading
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -90,21 +93,95 @@ def column_rules() -> list[dict]:
         elif col == config.REDACTOR_FIELD:
             how = "Automatic: AntBox redactor of the approving analyst"
         elif col in config.AI_FIELDS:
-            how = "LLM, from the referential (empty if not certain)"
+            how = "LLM, from the referential (analyst completes if the AI was not certain)"
         else:
             how = "Analyst (optional)"
-        out.append({"column": col, "rule": how, "referential_field": (f.source_name or f.name) if f else None,
+        if col in config.REQUIRED_FIELDS:
+            how += " — MANDATORY"
+        out.append({"column": col, "rule": how, "required": col in config.REQUIRED_FIELDS, "referential_field": (f.source_name or f.name) if f else None,
                     "values": len(f.values) if f else 0})
     return out
 
 
-def connector_file(doc_type: str) -> str:
-    k = referential.key(doc_type)
-    if "press" in k or "social" in k:
-        return "connector_press_article.csv"
-    if "brochure" in k or "manufacturer" in k:
-        return "connector_commercial_brochure.csv"
-    return f"connector_{capture.slug(doc_type or 'other', 40)}.csv"
+# ----------------------------------------------------------------- the single connector file
+_connector_lock = threading.Lock()
+
+
+def _read_connector() -> list[list[str]]:
+    f = config.CONNECTOR_CSV
+    if not f.exists():
+        return []
+    with open(f, encoding=config.CSV_ENCODING, newline="") as fh:
+        rows = list(csv.reader(fh, delimiter=config.CSV_SEPARATOR))
+    return [r for r in rows[1:] if any(r)]       # without the header
+
+
+def _write_connector(rows: list[list[str]]) -> None:
+    tmp = config.CONNECTOR_CSV.with_suffix(".tmp")
+    with open(tmp, "w", encoding=config.CSV_ENCODING, newline="") as fh:
+        w = csv.writer(fh, delimiter=config.CSV_SEPARATOR)
+        w.writerow(COLUMNS)
+        w.writerows(rows)
+    tmp.replace(config.CONNECTOR_CSV)
+
+
+def connector_add(link: dict) -> int:
+    """Add (or replace) the article's row in the connector file. Returns the number of rows."""
+    new = row(link)
+    with _connector_lock:
+        rows = [r for r in _read_connector() if r[:1] != new[:1]]   # same File Name -> replaced
+        rows.append(new)
+        _write_connector(rows)
+        return len(rows)
+
+
+def connector_remove(link: dict) -> None:
+    name = f"{base_name(link)}.pdf"
+    with _connector_lock:
+        rows = _read_connector()
+        kept = [r for r in rows if r[:1] != [name]]
+        if len(kept) != len(rows):
+            _write_connector(kept)
+
+
+def connector_info() -> dict:
+    rows = _read_connector()
+    archives = sorted((config.CONNECTOR_DIR / "archive").glob("*.csv"), reverse=True)
+    return {"file": config.CONNECTOR_CSV.name, "rows": len(rows),
+            "updated_at": datetime.fromtimestamp(config.CONNECTOR_CSV.stat().st_mtime).isoformat(timespec="minutes")
+            if config.CONNECTOR_CSV.exists() else None,
+            "archives": [a.name for a in archives[:20]]}
+
+
+def connector_bytes() -> bytes:
+    with _connector_lock:
+        if not config.CONNECTOR_CSV.exists():
+            _write_connector([])
+        return config.CONNECTOR_CSV.read_bytes()
+
+
+def connector_package() -> tuple[bytes, str]:
+    """Zip: the connector CSV + the PDF of every row."""
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(config.CONNECTOR_CSV.name, connector_bytes())
+        for r in _read_connector():
+            pdf = config.PDF_DIR / r[0]
+            if r and pdf.exists():
+                z.write(pdf, r[0])
+    return buf.getvalue(), f"antbox_connector_{stamp}.zip"
+
+
+def connector_archive() -> str | None:
+    """After an import into AntBox: keep a dated copy and start an empty file."""
+    with _connector_lock:
+        if not config.CONNECTOR_CSV.exists() or not _read_connector():
+            return None
+        name = f"antbox_connector_{datetime.now():%Y-%m-%d_%H%M%S}.csv"
+        shutil.copyfile(config.CONNECTOR_CSV, config.CONNECTOR_DIR / "archive" / name)
+        _write_connector([])
+        return name
 
 
 def pdf_path(link: dict) -> Path | None:
@@ -135,20 +212,15 @@ def single(link: dict, fmt: str) -> tuple[bytes | Path, str, str]:
 
 
 def bulk(links: list[dict], fmt: str = "both") -> tuple[bytes, str]:
-    """AntBox package: one import CSV per document type (connector) + every PDF."""
+    """Selection package: one connector CSV for the selected links + their PDFs."""
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    groups: dict[str, list[dict]] = {}
-    for link in links:
-        doc = ((link.get("metadata") or {}).get("Document type") or [""])[0]
-        groups.setdefault(connector_file(doc), []).append(link)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         if fmt in ("csv", "both"):
-            for fname, group in groups.items():
-                z.writestr(fname, csv_bytes(group))
+            z.writestr(config.CONNECTOR_CSV.name, csv_bytes(links))
         if fmt in ("pdf", "both"):
             for link in links:
                 p = pdf_path(link)
                 if p:
                     z.write(p, f"{base_name(link)}.pdf")
-    return buf.getvalue(), f"antbox_import_{stamp}.zip"
+    return buf.getvalue(), f"antbox_export_{stamp}.zip"

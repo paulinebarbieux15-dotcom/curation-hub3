@@ -23,19 +23,20 @@ import { errorMessage, formatDate } from '../ui/util';
 
       <section class="card span-2">
         <h2>AntBox import CSV</h2>
-        <p class="muted small">Each approved link gives one row of the AntBox connector CSV (separator “{{ s()?.csv?.separator }}”,
-          multi-values “{{ s()?.csv?.multi_separator }}”), next to its PDF with the same name. The package holds one CSV per
-          document type: <code>connector_press_article.csv</code> and <code>connector_commercial_brochure.csv</code>.</p>
+        <p class="muted small">All approved articles go into <b>one single connector file</b>
+          (<code>{{ s()?.connector?.file }}</code>, {{ s()?.connector?.rows ?? 0 }} rows): each approval adds a row.
+          Separator “{{ s()?.csv?.separator }}”, multi-values “{{ s()?.csv?.multi_separator }}”.
+          Approval is refused while a <b>mandatory</b> column is empty.</p>
         <table class="table compact">
           <thead><tr><th>Column</th><th>Filled by</th><th>Referential field</th></tr></thead>
           <tbody>
             @for (c of s()?.antbox_csv || []; track c.column) {
-              <tr><td><code>{{ c.column }}</code></td><td>{{ c.rule }}</td>
+              <tr><td><code>{{ c.column }}</code> @if (c.required) { <span class="req">mandatory</span> }</td><td>{{ c.rule }}</td>
                 <td class="muted small">{{ c.referential_field ? c.referential_field + ' (' + c.values + ' values)' : '—' }}</td></tr>
             }
           </tbody>
         </table>
-        <a class="btn small mt-s" [href]="api.exportApprovedUrl('both')">Download AntBox package (all approved)</a>
+        <a class="btn small mt-s" [href]="api.connectorPackageUrl()">Download connector CSV + PDFs</a>
       </section>
 
       <section class="card">

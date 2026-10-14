@@ -91,7 +91,12 @@ AI_FIELDS = _list("AI_FIELDS", "Document type,Year,Parts/Modules,Optionnal,Opera
 UNUSED_FIELDS = _list("UNUSED_FIELDS", "Meeting or Forum")
 # Column filled automatically from the analyst's profile ("Automatic")
 REDACTOR_FIELD = os.getenv("REDACTOR_FIELD", "Attachment redactor")
-REQUIRED_FIELDS = _list("REQUIRED_FIELDS", "Document type")   # needed before approval
+# Mandatory metadata: approval is refused while one of them is empty
+REQUIRED_FIELDS = _list(
+    "REQUIRED_FIELDS", "Document type,Attachment redactor,Year,Parts/Modules,OperationType,Vehicles")
+# The single AntBox connector file: every approved article adds one row
+CONNECTOR_DIR = DATA_DIR / "connector"
+CONNECTOR_CSV = CONNECTOR_DIR / "antbox_connector.csv"
 # The two connector document types: the LLM picks one, social links default to the first
 DOCUMENT_TYPES = _list("DOCUMENT_TYPES", "Press articles / Social Network,Commercial Brochure / Manufacturer website")
 # Constant columns
@@ -144,5 +149,5 @@ def use_system_certificates() -> None:
         pass
 
 
-for _d in (DATA_DIR, PDF_DIR, REGISTRY_DIR, EXPORT_DIR, REPORT_DIR, SECRETS_DIR):
+for _d in (DATA_DIR, PDF_DIR, REGISTRY_DIR, EXPORT_DIR, REPORT_DIR, SECRETS_DIR, DATA_DIR / "connector" / "archive"):
     _d.mkdir(parents=True, exist_ok=True)

@@ -27,6 +27,7 @@ from app.main import app  # noqa: E402
 def client():
     for suffix in ("", "-wal", "-shm"):
         Path(str(config.DB_PATH) + suffix).unlink(missing_ok=True)
+    config.CONNECTOR_CSV.unlink(missing_ok=True)
     db.init()
     worker._next_slot.clear()
     with TestClient(app) as c:

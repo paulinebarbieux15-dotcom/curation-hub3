@@ -2,7 +2,7 @@ import { HttpClient, HttpHeaders, HttpParams } from '@angular/common/http';
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { Observable, Subject, tap } from 'rxjs';
 import {
-  IngestResult, Link, LinkFilters, LinkPage, PreviewItem, RefField, RegistryEntry, Report, Settings, Stats, User,
+  ConnectorInfo, IngestResult, Link, LinkFilters, LinkPage, PreviewItem, RefField, RegistryEntry, Report, Settings, Stats, User,
 } from './models';
 
 const USER_KEY = 'curation.userId';
@@ -138,7 +138,7 @@ export class ApiService {
   saveLink(id: number, body: Partial<Pick<Link, 'title' | 'summary_html' | 'metadata' | 'info'>>) {
     return this.patch<Link & { rejected_values: Record<string, string[]> }>('/links/' + id, body);
   }
-  approve(id: number) { return this.post<{ link: Link; registry_id: number }>(`/links/${id}/approve`); }
+  approve(id: number) { return this.post<{ link: Link; registry_id: number; connector_rows: number }>(`/links/${id}/approve`); }
   reject(id: number, reason = '') { return this.post(`/links/${id}/reject`, { reason }); }
   reopen(id: number) { return this.post(`/links/${id}/reopen`); }
   claim(id: number) { return this.post(`/links/${id}/claim`); }
@@ -157,6 +157,13 @@ export class ApiService {
   exportApprovedUrl(format: 'pdf' | 'csv' | 'both') { return `/api/export?approved=true&format=${format}`; }
   registryFileUrl(id: number, kind: 'pdf' | 'csv') { return `/api/registry/${id}/${kind}`; }
   reportFileUrl(id: number, kind: 'pdf' | 'html' | 'md') { return `/api/reports/${id}/${kind}`; }
+
+  // ---------------------------------------------------------------- AntBox connector file
+  connector() { return this.get<ConnectorInfo>('/connector'); }
+  archiveConnector() { return this.post<{ archived: string }>('/connector/archive'); }
+  connectorCsvUrl() { return '/api/connector/csv'; }
+  connectorPackageUrl() { return '/api/connector/package'; }
+  connectorArchiveUrl(name: string) { return `/api/connector/archive/${encodeURIComponent(name)}`; }
 
   // ---------------------------------------------------------------- registry & reports
   registry(q = '', date_from = '', date_to = '', operator = '') {

@@ -96,8 +96,8 @@ def test_full_flow_ai_fill_review_approve_registry_exports(client, users):
         with db.tx() as con:
             con.execute("UPDATE registry SET title='hacked'")
 
-    pkg = zipfile.ZipFile(io.BytesIO(client.get("/api/export?approved=true").content)).namelist()
-    assert "connector_press_article.csv" in pkg and any(n.endswith(".pdf") for n in pkg)
+    pkg = zipfile.ZipFile(io.BytesIO(client.get("/api/connector/package").content)).namelist()
+    assert "antbox_connector.csv" in pkg and any(n.endswith(".pdf") for n in pkg)
 
     both = client.get("/api/links/1/export?format=both")
     names = zipfile.ZipFile(io.BytesIO(both.content)).namelist()
@@ -109,15 +109,40 @@ def test_full_flow_ai_fill_review_approve_registry_exports(client, users):
     assert s["done_today_me"] == 1 and s["velocity"]["me"][-1] == 1 and s["ai_acceptance"] is not None
 
 
-def test_required_fields_block_approval(client, users):
+def test_mandatory_metadata_block_approval(client, users):
     client.post("/api/ingest", json={"urls": ["https://x.org/r"], "mode": "me"}, headers=as_user(users[0]))
     worker.drain()
-    client.patch("/api/links/1", headers=as_user(users[0]), json={"metadata": {"Document type": []}})
+    meta = client.get("/api/links/1").json()["metadata"]
+    client.patch("/api/links/1", headers=as_user(users[0]), json={"metadata": {**meta, "Vehicles": []}})
     r = client.post("/api/links/1/approve", headers=as_user(users[0]))
-    assert r.status_code == 422 and "Document type" in r.json()["detail"]
+    assert r.status_code == 422 and "Vehicles" in r.json()["detail"] and "Attachment redactor" in r.json()["detail"]
+    client.patch(f"/api/users/{users[0]}", json={"antbox_redactor": "Redacteur_001"})
+    client.patch("/api/links/1", headers=as_user(users[0]), json={"metadata": meta})
+    assert client.post("/api/links/1/approve", headers=as_user(users[0])).status_code == 200
+
+
+def test_single_connector_file_gets_one_row_per_approved_article(client, users):
+    a = users[0]
+    client.patch(f"/api/users/{a}", json={"antbox_redactor": "Redacteur_001"})
+    client.post("/api/ingest", json={"urls": ["https://c.com/1", "https://c.com/2", "https://c.com/3"], "mode": "me"},
+                headers=as_user(a))
+    worker.drain()
+    for i in (1, 2):
+        assert client.post(f"/api/links/{i}/approve", headers=as_user(a)).json()["connector_rows"] == i
+    rows = list(csv.reader(io.StringIO(client.get("/api/connector/csv").content.decode("utf-8-sig")), delimiter=";"))
+    assert rows[0][0] == "File Name" and len(rows) == 3
+    assert [r[1] for r in rows[1:]] == ["https://c.com/1", "https://c.com/2"]
+    client.post("/api/links/1/reopen", headers=as_user(a))                 # reopened -> row removed
+    assert client.get("/api/connector").json()["rows"] == 1
+    client.post("/api/links/1/approve", headers=as_user(a))                # approved again -> back, once
+    assert client.get("/api/connector").json()["rows"] == 2
+    arch = client.post("/api/connector/archive", headers=as_user(a)).json()["archived"]
+    assert client.get("/api/connector").json()["rows"] == 0
+    assert client.get(f"/api/connector/archive/{arch}").status_code == 200
 
 
 def test_report_includes_links_and_summaries(client, users):
+    client.patch(f"/api/users/{users[0]}", json={"antbox_redactor": "Redacteur_001"})
     for i in range(3):
         client.post("/api/ingest", json={"urls": [f"https://r.com/{i}"], "mode": "me"}, headers=as_user(users[0]))
     worker.drain()
@@ -161,6 +186,7 @@ def test_retry_with_backoff_then_dead_letter(client, users, monkeypatch):
 
 def test_filters(client, users):
     a = users[0]
+    client.patch(f"/api/users/{a}", json={"antbox_redactor": "Redacteur_001"})
     client.post("/api/ingest", json={"urls": ["https://f.com/1", "https://f.com/2"], "mode": "me"}, headers=as_user(a))
     client.post("/api/ingest", json={"urls": ["https://f.com/3"], "mode": "global"})
     worker.drain()
