@@ -103,8 +103,13 @@ def credentials(name: str) -> dict:
     return {
         "username": os.getenv(prefix + "USERNAME", ""),
         "password": os.getenv(prefix + "PASSWORD", ""),
-        "totp": os.getenv(prefix + "TOTP", "").replace(" ", ""),
+        "totp": clean_secret(os.getenv(prefix + "TOTP", "")),
     }
+
+
+def clean_secret(secret: str) -> str:
+    """Authenticator setup keys are often shown in groups ("abcd efgh ...") or lower case."""
+    return "".join(ch for ch in secret.upper() if ch.isalnum())
 
 
 def has_credentials(name: str | None) -> bool:
@@ -235,11 +240,54 @@ def _two_factor(page, r: dict, cred: dict, name: str) -> None:
         raise SocialSessionError(
             f"{name} asks for a verification code. Add SOCIAL_{name.upper()}_TOTP to .env "
             "(authenticator app secret) or log in manually with `python -m app.social_login`.")
+    el = page.locator(r["otp_field"]).first
+    el.fill(current_code(cred["totp"]))
+    el.press("Enter")
+
+
+def current_code(secret: str) -> str:
+    """6-digit code; waits for a fresh one if the current code expires in less than 5 seconds."""
     import pyotp
 
-    el = page.locator(r["otp_field"]).first
-    el.fill(pyotp.TOTP(cred["totp"]).now())
-    el.press("Enter")
+    totp = pyotp.TOTP(secret)
+    remaining = totp.interval - (time.time() % totp.interval)
+    if remaining < 5:
+        time.sleep(remaining + 0.5)
+    return totp.now()
+
+
+def check_codes() -> None:
+    """python -m app.social : compare these codes with the ones on the authenticator app."""
+    from datetime import datetime, timezone
+
+    import httpx
+
+    print(f"Computer clock (UTC): {datetime.now(timezone.utc):%H:%M:%S}")
+    try:
+        server = httpx.head("https://www.google.com", timeout=10).headers.get("date", "")
+        print(f"Internet time (UTC):  {server[17:25]}   -> both must match within a few seconds")
+    except Exception:
+        print("Internet time: not reachable (check the clock against your phone)")
+    found = False
+    for name in NETWORKS:
+        secret = credentials(name)["totp"]
+        if not secret:
+            continue
+        found = True
+        try:
+            import pyotp
+            totp = pyotp.TOTP(secret)
+            left = int(totp.interval - (time.time() % totp.interval))
+            print(f"{name:10s} code {totp.now()}  (valid {left}s more)  key ends with ...{secret[-4:]}")
+        except Exception as e:
+            print(f"{name:10s} INVALID KEY ({type(e).__name__}): copy the setup key again")
+    if not found:
+        print("No SOCIAL_..._TOTP key found in .env")
+
+
+if __name__ == "__main__":
+    config.use_system_certificates()
+    check_codes()
 
 
 def _wait_logged_in(page, name: str, timeout_s: float = 25) -> None:
