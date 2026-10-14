@@ -145,6 +145,77 @@ def _open(page, url: str) -> None:
         pass  # some pages never go idle
 
 
+# ----------------------------------------------------------------- X (Twitter) fallback
+_X_STATUS = re.compile(r"(?:x|twitter)\.com/[^/?#]+/status(?:es)?/(\d+)", re.I)
+
+
+def tweet_id(url: str) -> str | None:
+    m = _X_STATUS.search(url or "")
+    return m.group(1) if m else None
+
+
+def _esc(v) -> str:
+    import html
+    return html.escape(str(v or ""))
+
+
+def tweet_html(data: dict, url: str) -> str:
+    """A clean, printable page built from X's public tweet data (syndication API)."""
+    user = data.get("user") or {}
+    photos = [m.get("media_url_https") for m in (data.get("mediaDetails") or []) if m.get("media_url_https")]
+    quoted = data.get("quoted_tweet") or {}
+    imgs = "".join(f'<img src="{_esc(p)}" alt="">' for p in photos)
+    quote = ""
+    if quoted:
+        qu = quoted.get("user") or {}
+        quote = (f'<div class="quote"><b>{_esc(qu.get("name"))}</b> @{_esc(qu.get("screen_name"))}'
+                 f'<p>{_esc(quoted.get("text"))}</p></div>')
+    stats = f'{data.get("favorite_count", 0)} likes · {data.get("conversation_count", 0)} replies'
+    return f"""<!doctype html><html><head><meta charset="utf-8"><title>{_esc(user.get("name"))} on X</title>
+<style>body{{font-family:Segoe UI,Arial,sans-serif;max-width:640px;margin:30px auto;color:#0f1419}}
+.card{{border:1px solid #cfd9de;border-radius:16px;padding:18px 20px}} .name{{font-weight:700;font-size:17px}}
+.handle,.meta{{color:#536471;font-size:14px}} .text{{font-size:18px;line-height:1.45;white-space:pre-wrap;margin:14px 0}}
+img{{max-width:100%;border-radius:12px;margin:6px 0;display:block}}
+.quote{{border:1px solid #cfd9de;border-radius:12px;padding:10px 14px;margin:10px 0;font-size:15px}}
+.src{{color:#536471;font-size:12px;margin-top:14px;word-break:break-all}}</style></head>
+<body><article class="card"><div class="name">{_esc(user.get("name"))}</div>
+<div class="handle">@{_esc(user.get("screen_name"))}</div>
+<div class="text">{_esc(data.get("text"))}</div>{imgs}{quote}
+<div class="meta">{_esc(data.get("created_at"))} · {_esc(stats)}</div>
+<div class="src">Source: {_esc(url)}</div></article></body></html>"""
+
+
+def _x_fallback(context, url: str):
+    """X refuses to show the post to an automated browser: use the official embed, else the public data."""
+    tid = tweet_id(url)
+    if not tid:
+        return None
+    page = context.new_page()
+    try:  # 1. official embedded tweet (what news sites display)
+        page.goto(f"https://platform.twitter.com/embed/Tweet.html?id={tid}&theme=light&dnt=true&lang=en",
+                  wait_until="domcontentloaded", timeout=config.CAPTURE_TIMEOUT_MS)
+        page.wait_for_selector("article", state="visible", timeout=20000)
+        page.wait_for_timeout(2000)
+        if not _error_page(page) and len(page.inner_text("body").strip()) > 20:
+            return page
+    except Exception:
+        pass
+    try:  # 2. public tweet data -> our own printable page
+        token = page.evaluate("id => ((Number(id) / 1e15) * Math.PI).toString(36).replace(/(0+|\\.)/g, '')", tid)
+        resp = page.goto(f"https://cdn.syndication.twimg.com/tweet-result?id={tid}&lang=en&token={token}",
+                         wait_until="domcontentloaded", timeout=30000)
+        if resp and resp.ok:
+            import json as _json
+            data = _json.loads(page.inner_text("body"))
+            if data.get("text"):
+                page.set_content(tweet_html(data, url), wait_until="load")
+                return page
+    except Exception:
+        pass
+    page.close()
+    return None
+
+
 def capture(url: str, link_id: int) -> CaptureResult:
     with_session = social.check_before_capture(url)
     if config.CAPTURE_FAKE:
@@ -168,24 +239,33 @@ def capture(url: str, link_id: int) -> CaptureResult:
             page = context.new_page()
             _open(page, url)
             social.dismiss_consent(page)
-            if with_session and social.looks_logged_out(page.url):
-                if social.has_credentials(network):
-                    social.auto_login(context, network)
-                    _open(page, url)
-                if social.looks_logged_out(page.url):
-                    raise social.SocialSessionError(
-                        "Social session expired and automatic login failed: check credentials in .env "
-                        "or run `python -m app.social_login`.")
-            if with_session:
-                _wait_for_post(page, url, network)
+            via_fallback = False
+            try:
+                if with_session and social.looks_logged_out(page.url):
+                    if social.has_credentials(network):
+                        social.auto_login(context, network)
+                        _open(page, url)
+                    if social.looks_logged_out(page.url):
+                        raise social.SocialSessionError(
+                            "Social session expired and automatic login failed: check credentials in .env "
+                            "or run `python -m app.social_login`.")
+                if with_session:
+                    _wait_for_post(page, url, network)
+            except Exception:
+                fallback = _x_fallback(context, url) if network == "x" else None
+                if fallback is None:
+                    raise
+                page, via_fallback = fallback, True
 
             title = (page.title() or "").strip()
             text = page.evaluate(_JS_TEXT) or ""
-            final_url = page.url
+            final_url = url if via_fallback else page.url
             try:
-                canonical = page.evaluate(_JS_CANONICAL) or ""
+                canonical = "" if via_fallback else (page.evaluate(_JS_CANONICAL) or "")
             except Exception:
                 canonical = ""
+            if via_fallback and (not title or title.lower() in ("x", "twitter")):
+                title = "X post: " + " ".join(text.split())[:90]
             try:
                 page.evaluate(_JS_SCROLL)
                 page.evaluate(_JS_CLEANUP)

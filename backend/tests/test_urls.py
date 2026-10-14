@@ -33,3 +33,14 @@ def test_simhash_detects_near_duplicates():
     assert hamming(simhash(base), simhash(variant)) <= 3
     assert hamming(simhash(base), simhash(other)) > 10
     assert simhash("too short") == ""
+
+
+def test_tweet_id_and_printable_tweet_page():
+    from app.capture import tweet_html, tweet_id
+    assert tweet_id("https://x.com/Airbus/status/1845123456789012345?s=20") == "1845123456789012345"
+    assert tweet_id("https://twitter.com/a/statuses/42") == "42"
+    assert tweet_id("https://x.com/Airbus") is None
+    html = tweet_html({"text": "New <drone> battery", "user": {"name": "Airbus", "screen_name": "Airbus"},
+                       "created_at": "2026-10-14", "mediaDetails": [{"media_url_https": "https://pbs.twimg.com/a.jpg"}]},
+                      "https://x.com/Airbus/status/1")
+    assert "New &lt;drone&gt; battery" in html and "pbs.twimg.com/a.jpg" in html and "@Airbus" in html
