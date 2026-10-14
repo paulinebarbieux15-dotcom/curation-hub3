@@ -108,6 +108,8 @@ SOCIAL_DOMAINS = _list(
     "SOCIAL_DOMAINS",
     "linkedin.com,lnkd.in,x.com,twitter.com,t.co,facebook.com,instagram.com,threads.net,reddit.com,youtube.com",
 )
+# true = the Chrome window is visible during "Test login" (to see or finish a security check by hand)
+SOCIAL_SHOW_BROWSER = _bool("SOCIAL_SHOW_BROWSER", False)
 SOCIAL_LOGIN_PAGES = _list("SOCIAL_LOGIN_PAGES", "https://www.linkedin.com/login")
 
 # --- Notifications ------------------------------------------------------------

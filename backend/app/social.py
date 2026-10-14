@@ -220,15 +220,22 @@ def auto_login(context, name: str) -> None:
         protect_file()
         record_login(name, "logged in automatically")
     except SocialSessionError as e:
+        shot = _failure_screenshot(page, name)
         record_login(name, f"failed: {e}")
-        raise
+        raise SocialSessionError(f"{e}{shot}") from e
     except Exception as e:
-        record_login(name, "failed: unexpected login page")
+        shot = _failure_screenshot(page, name)
+        step = str(e).splitlines()[0][:200]
+        record_login(name, f"failed: {type(e).__name__} at {page.url[:80]}")
         raise SocialSessionError(
-            f"Automatic login to {name} failed ({type(e).__name__}). The login page may have changed: "
-            "log in manually with `python -m app.social_login`.") from e
+            f"Automatic login to {name} failed ({type(e).__name__}: {step}). Page reached: {page.url[:120]}. "
+            f"The login page may have changed or shows a security check: log in manually with "
+            f"`python -m app.social_login`.{shot}") from e
     finally:
-        page.close()
+        try:
+            page.close()
+        except Exception:
+            pass
 
 
 def _two_factor(page, r: dict, cred: dict, name: str) -> None:
@@ -290,7 +297,19 @@ if __name__ == "__main__":
     check_codes()
 
 
-def _wait_logged_in(page, name: str, timeout_s: float = 25) -> None:
+def _failure_screenshot(page, name: str) -> str:
+    """Save what the browser showed when the login failed (data/secrets/login_failed_<network>.png)."""
+    try:
+        path = config.SECRETS_DIR / f"login_failed_{name}.png"
+        page.screenshot(path=str(path), full_page=True)
+        return f" Screenshot of the page: {path}"
+    except Exception:
+        return ""
+
+
+def _wait_logged_in(page, name: str, timeout_s: float | None = None) -> None:
+    # with a visible window, leave time to complete a security check by hand
+    timeout_s = timeout_s or (180 if config.SOCIAL_SHOW_BROWSER else 25)
     end = time.monotonic() + timeout_s
     while time.monotonic() < end:
         if not looks_logged_out(page.url):

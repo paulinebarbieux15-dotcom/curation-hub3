@@ -61,6 +61,8 @@ async () => {
 }
 """
 
+_DESKTOP_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+               "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36")
 _PDF_MARGINS = {"top": "15mm", "bottom": "15mm", "left": "12mm", "right": "12mm"}
 
 
@@ -79,8 +81,10 @@ def slug(text: str, length: int = 60) -> str:
     return text[:length].strip("-") or "article"
 
 
-def _launch(p):
-    opts = {"headless": True}
+def _launch(p, headless: bool = True):
+    opts = {"headless": headless}
+    if not headless:
+        opts["args"] = ["--start-maximized"]
     if config.BROWSER_CHANNEL:
         opts["channel"] = config.BROWSER_CHANNEL
     return p.chromium.launch(**opts)
@@ -107,6 +111,7 @@ def capture(url: str, link_id: int) -> CaptureResult:
         try:
             context = browser.new_context(
                 locale="en-US",
+                user_agent=_DESKTOP_UA if with_session else None,
                 storage_state=str(config.SOCIAL_SESSION_FILE) if with_session and social.session_present() else None,
             )
             if with_session and not social.session_present():
@@ -183,10 +188,12 @@ def login_network(name: str) -> dict:
     from playwright.sync_api import sync_playwright
 
     with _browser_lock, sync_playwright() as p:
-        browser = _launch(p)
+        browser = _launch(p, headless=not config.SOCIAL_SHOW_BROWSER)
         try:
             context = browser.new_context(
                 locale="en-US",
+                # a regular desktop Chrome identity: some networks block "HeadlessChrome"
+                user_agent=_DESKTOP_UA,
                 storage_state=str(config.SOCIAL_SESSION_FILE) if social.session_present() else None)
             social.auto_login(context, name)
         finally:
