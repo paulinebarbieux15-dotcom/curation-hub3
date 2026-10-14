@@ -30,7 +30,7 @@ NETWORKS: dict[str, dict] = {
         "domains": ["linkedin.com", "lnkd.in"],
         "login_page": "https://www.linkedin.com/login",
         "steps": [
-            ("fill", "#username, input[name=session_key], input[autocomplete=username]", "username"),
+            ("fill", "#username, input[name=session_key], input[autocomplete=username], input[type=email]", "username"),
             ("fill", "#password, input[name=session_password], input[type=password]", "password"),
             ("click", "button[type=submit], button[data-litms-control-urn='login-submit']"),
         ],
@@ -231,7 +231,17 @@ def auto_login(context, name: str) -> None:
             record_login(name, "already logged in")
             return
         logged_in = False
+        _leave_account_chooser(page)
+        password_selector = next((st[1] for st in r["steps"] if st[0] == "fill" and st[2] == "password"), "")
         for step in r["steps"]:
+            # "Welcome back" screens sometimes ask only for the password: skip the username step
+            if step[0] == "fill" and step[2] == "username" and password_selector:
+                try:
+                    if page.locator(password_selector).first.is_visible() and \
+                            not page.locator(step[1]).first.is_visible():
+                        continue
+                except Exception:
+                    pass
             el = _wait_for_field(page, step[1])
             if el is None:          # the network went straight to the feed: already logged in
                 logged_in = True
@@ -325,13 +335,38 @@ if __name__ == "__main__":
     check_codes()
 
 
+_OTHER_ACCOUNT_BUTTONS = [
+    "Sign in using another account", "Se connecter avec un autre compte", "Use another account",
+    "Utiliser un autre compte", "Sign in with email", "Se connecter avec une adresse e-mail",
+    "Not you?", "Pas vous ?", "Switch accounts", "Changer de compte",
+]
+
+
+def _leave_account_chooser(page) -> None:
+    """'Welcome back' screens show a remembered profile instead of the form: ask for the form."""
+    for label in _OTHER_ACCOUNT_BUTTONS:
+        for role in ("button", "link"):
+            try:
+                el = page.get_by_role(role, name=label)
+                if el.count() and el.first.is_visible():
+                    el.first.click(timeout=3000)
+                    page.wait_for_timeout(1500)
+                    return
+            except Exception:
+                continue
+
+
 def _wait_for_field(page, selector: str, timeout_s: float = 30):
     """The field once visible, or None if the page left the login screen (already logged in).
     Raises TimeoutError if neither happens."""
     end = time.monotonic() + timeout_s
     loc = page.locator(selector).first
+    tried_chooser = False
     while time.monotonic() < end:
         dismiss_consent(page)
+        if not tried_chooser and time.monotonic() > end - timeout_s + 5:
+            _leave_account_chooser(page)
+            tried_chooser = True
         try:
             if loc.is_visible():
                 return loc
