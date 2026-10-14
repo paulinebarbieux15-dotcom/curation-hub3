@@ -738,9 +738,12 @@ def set_social(data: ToggleIn):
 @app.post("/api/settings/social/login/{network}", tags=["settings"])
 def social_login(network: str):
     try:
-        return capture.login_network(network)
+        status = capture.login_network(network)
     except social.SocialSessionError as e:
         raise HTTPException(422, str(e)) from e
+    status["requeued"] = pipeline.requeue_social_errors()   # failed posts are captured again
+    worker.wake()
+    return status
 
 
 @app.post("/api/settings/llm/test", tags=["settings"])

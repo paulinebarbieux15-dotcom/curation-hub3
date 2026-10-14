@@ -37,6 +37,11 @@ def main(pages: list[str]) -> None:
         social.protect_file()
         browser.close()
     print(f"\nSession saved to {config.SOCIAL_SESSION_FILE}")
+    from . import db, pipeline
+    db.init()
+    n = pipeline.requeue_social_errors()
+    if n:
+        print(f"{n} social link(s) in error will be captured again by the running app.")
     print("Remember to enable social capture in Settings > Social account.")
 
 

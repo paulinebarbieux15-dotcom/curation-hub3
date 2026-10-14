@@ -195,3 +195,17 @@ def test_tracking_params_removed_from_stored_url(client, users):
     assert r["created"][0]["url"] == "https://site.com/a?id=2"
     p = client.post("/api/ingest/preview", json={"text": "bad one http://bad and www."}).json()
     assert p["invalid"] == 1
+
+
+def test_social_errors_are_requeued_after_login(client, users, monkeypatch):
+    from app import social
+    client.post("/api/ingest", json={"urls": ["https://www.instagram.com/p/abc/"]})
+    worker.drain()
+    assert client.get("/api/links/1").json()["status"] == "error"
+    monkeypatch.setenv("SOCIAL_INSTAGRAM_USERNAME", "u")
+    monkeypatch.setenv("SOCIAL_INSTAGRAM_PASSWORD", "p")
+    client.put("/api/settings/social", json={"enabled": True})
+    r = client.post("/api/settings/social/login/instagram").json()
+    assert r["requeued"] == 1
+    worker.drain()
+    assert client.get("/api/links/1").json()["status"] == "to_review"

@@ -119,6 +119,19 @@ def ingest(urls: list[str], source: str = "manual", mode: str = "auto", user_id:
     return {"created": created, "duplicates": duplicates, "invalid": invalid}
 
 
+def requeue_social_errors() -> int:
+    """After a successful social login: re-run every social link that failed (login problems)."""
+    with db.tx() as con:
+        rows = con.execute("SELECT id, url FROM links WHERE status='error' AND source='social'").fetchall()
+        for r in rows:
+            con.execute("UPDATE links SET status='queued', error=NULL, updated_at=? WHERE id=?", (db.now(), r["id"]))
+            enqueue(con, r["id"], r["url"])
+            db.log(con, "retry", r["id"], None, "social session restored")
+    if rows:
+        live.publish("links", ids=[r["id"] for r in rows])
+    return len(rows)
+
+
 # ----------------------------------------------------------------- few-shot
 _WORDS = re.compile(r"[a-z]{4,}")
 
