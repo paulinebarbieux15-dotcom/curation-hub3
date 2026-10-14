@@ -234,15 +234,13 @@ def auto_login(context, name: str) -> None:
         _leave_account_chooser(page)
         password_selector = next((st[1] for st in r["steps"] if st[0] == "fill" and st[2] == "password"), "")
         for step in r["steps"]:
+            kind = step[2] if step[0] == "fill" else None
             # "Welcome back" screens sometimes ask only for the password: skip the username step
-            if step[0] == "fill" and step[2] == "username" and password_selector:
-                try:
-                    if page.locator(password_selector).first.is_visible() and \
-                            not page.locator(step[1]).first.is_visible():
-                        continue
-                except Exception:
-                    pass
-            el = _wait_for_field(page, step[1])
+            if kind == "username" and password_selector and \
+                    _find_visible(page, password_selector, "password") is not None and \
+                    _find_visible(page, step[1], "username") is None:
+                continue
+            el = _wait_for_field(page, step[1], kind, click=step[0] == "click")
             if el is None:          # the network went straight to the feed: already logged in
                 logged_in = True
                 break
@@ -277,15 +275,18 @@ def auto_login(context, name: str) -> None:
 
 
 def _two_factor(page, r: dict, cred: dict, name: str) -> None:
-    try:
-        page.locator(r["otp_field"]).first.wait_for(state="visible", timeout=6000)
-    except Exception:
+    end = time.monotonic() + 6
+    el = None
+    while time.monotonic() < end and el is None:
+        el = _find_visible(page, r["otp_field"])
+        if el is None:
+            page.wait_for_timeout(500)
+    if el is None:
         return
     if not cred["totp"]:
         raise SocialSessionError(
             f"{name} asks for a verification code. Add SOCIAL_{name.upper()}_TOTP to .env "
             "(authenticator app secret) or log in manually with `python -m app.social_login`.")
-    el = page.locator(r["otp_field"]).first
     el.fill(current_code(cred["totp"]))
     el.press("Enter")
 
@@ -335,6 +336,42 @@ if __name__ == "__main__":
     check_codes()
 
 
+# Visible text of the fields/buttons, used when the CSS selectors match nothing visible
+FIELD_LABELS = {
+    "username": ["E-mail ou téléphone", "Email or phone", "Email or Phone", "Adresse e-mail", "E-mail", "Email",
+                 "Phone, email, or username", "Téléphone, adresse e-mail ou nom d’utilisateur",
+                 "Numéro de mobile, nom de profil ou e-mail", "Mobile number, username or email",
+                 "Phone number, username, or email", "Nom d’utilisateur", "Username"],
+    "password": ["Mot de passe", "Password"],
+}
+SUBMIT_LABELS = ["S’identifier", "S'identifier", "Sign in", "Se connecter", "Log in", "Connexion", "Log In"]
+
+
+def _find_visible(page, selector: str, kind: str | None = None, click: bool = False):
+    """First VISIBLE element matching the selector (pages often hold hidden copies of their fields),
+    else the first visible field whose label/placeholder matches, else None."""
+    try:
+        for el in page.locator(selector).all():
+            try:
+                if el.is_visible():
+                    return el
+            except Exception:
+                continue
+    except Exception:
+        pass
+    labels = SUBMIT_LABELS if click else FIELD_LABELS.get(kind or "", [])
+    for label in labels:
+        for loc in ((page.get_by_role("button", name=label, exact=True),) if click else
+                    (page.get_by_label(label, exact=True), page.get_by_placeholder(label, exact=True))):
+            try:
+                for el in loc.all():
+                    if el.is_visible():
+                        return el
+            except Exception:
+                continue
+    return None
+
+
 _OTHER_ACCOUNT_BUTTONS = [
     "Sign in using another account", "Se connecter avec un autre compte", "Use another account",
     "Utiliser un autre compte", "Sign in with email", "Se connecter avec une adresse e-mail",
@@ -356,26 +393,23 @@ def _leave_account_chooser(page) -> None:
                 continue
 
 
-def _wait_for_field(page, selector: str, timeout_s: float = 30):
-    """The field once visible, or None if the page left the login screen (already logged in).
+def _wait_for_field(page, selector: str, kind: str | None = None, click: bool = False, timeout_s: float = 30):
+    """The visible field/button, or None if the page left the login screen (already logged in).
     Raises TimeoutError if neither happens."""
     end = time.monotonic() + timeout_s
-    loc = page.locator(selector).first
     tried_chooser = False
     while time.monotonic() < end:
         dismiss_consent(page)
+        el = _find_visible(page, selector, kind, click)
+        if el is not None:
+            return el
+        if not looks_logged_out(page.url):
+            return None
         if not tried_chooser and time.monotonic() > end - timeout_s + 5:
             _leave_account_chooser(page)
             tried_chooser = True
-        try:
-            if loc.is_visible():
-                return loc
-        except Exception:
-            pass
-        if not looks_logged_out(page.url):
-            return None
         page.wait_for_timeout(700)
-    raise TimeoutError(f"login field not found ({selector.split(',')[0]})")
+    raise TimeoutError(f"login {'button' if click else 'field'} not found ({kind or selector.split(',')[0]})")
 
 
 def _failure_screenshot(page, name: str) -> str:
