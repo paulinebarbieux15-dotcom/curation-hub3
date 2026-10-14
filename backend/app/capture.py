@@ -82,12 +82,59 @@ def slug(text: str, length: int = 60) -> str:
 
 
 def _launch(p, headless: bool = True):
-    opts = {"headless": headless}
+    # hide the "controlled by automation" flag that some networks (X, LinkedIn) refuse to serve
+    opts = {"headless": headless, "args": ["--disable-blink-features=AutomationControlled"]}
     if not headless:
-        opts["args"] = ["--start-maximized"]
+        opts["args"].append("--start-maximized")
     if config.BROWSER_CHANNEL:
         opts["channel"] = config.BROWSER_CHANNEL
     return p.chromium.launch(**opts)
+
+
+_STEALTH_JS = "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+
+# Element that proves the post itself is displayed, per network
+_READY_SELECTORS = {
+    "x": "article[data-testid=tweet], [data-testid=tweetText]",
+    "linkedin": "main, article, .feed-shared-update-v2",
+    "instagram": "article, main",
+    "facebook": "[role=article], [role=main]",
+}
+_ERROR_TEXTS = ("Something went wrong", "Un problème est survenu", "Une erreur s'est produite",
+                "Try reloading", "Essayez de recharger", "This page isn’t available", "Hmm...this page doesn’t exist")
+
+
+def _error_page(page) -> bool:
+    try:
+        body = page.inner_text("body", timeout=3000)[:3000]
+    except Exception:
+        return False
+    return any(t in body for t in _ERROR_TEXTS) and len(body) < 2500
+
+
+def _wait_for_post(page, url: str, network: str | None) -> None:
+    """Wait until the post is displayed; reload when the network shows its error page (max 3 tries)."""
+    selector = _READY_SELECTORS.get(network or "")
+    for attempt in range(3):
+        if selector:
+            try:
+                page.wait_for_selector(selector, state="visible", timeout=20000)
+            except Exception:
+                pass
+        page.wait_for_timeout(1500)
+        if not _error_page(page):
+            return
+        page.wait_for_timeout(3000 * (attempt + 1))
+        try:
+            retry = page.get_by_role("button", name=re.compile("Retry|Réessayer|Try again", re.I))
+            if retry.count():
+                retry.first.click(timeout=3000)
+            else:
+                _open(page, url)
+        except Exception:
+            _open(page, url)
+    raise RuntimeError(f"{network or 'The site'} answered with its error page (\"Something went wrong\") "
+                       "after 3 attempts: it may be limiting automated access. The capture will be retried later.")
 
 
 def _open(page, url: str) -> None:
@@ -114,6 +161,7 @@ def capture(url: str, link_id: int) -> CaptureResult:
                 user_agent=_DESKTOP_UA if with_session else None,
                 storage_state=str(config.SOCIAL_SESSION_FILE) if with_session and social.session_present() else None,
             )
+            context.add_init_script(_STEALTH_JS)
             if with_session and not social.session_present():
                 social.auto_login(context, network)
 
@@ -129,7 +177,7 @@ def capture(url: str, link_id: int) -> CaptureResult:
                         "Social session expired and automatic login failed: check credentials in .env "
                         "or run `python -m app.social_login`.")
             if with_session:
-                page.wait_for_timeout(2000)
+                _wait_for_post(page, url, network)
 
             title = (page.title() or "").strip()
             text = page.evaluate(_JS_TEXT) or ""
@@ -196,6 +244,7 @@ def login_network(name: str) -> dict:
                 # a regular desktop Chrome identity: some networks block "HeadlessChrome"
                 user_agent=_DESKTOP_UA,
                 storage_state=str(config.SOCIAL_SESSION_FILE) if social.session_present() else None)
+            context.add_init_script(_STEALTH_JS)
             social.auto_login(context, name)
         finally:
             browser.close()

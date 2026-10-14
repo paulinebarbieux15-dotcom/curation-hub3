@@ -150,6 +150,7 @@ const INFO_FIELDS: { key: keyof LinkInfo; label: string; type: string }[] = [
               <button class="btn danger" (click)="reject()">Confirm reject</button>
               <button class="btn ghost" (click)="rejecting.set(false)">Cancel</button>
             } @else {
+              <button class="btn ghost" [disabled]="readonly()" (click)="retry()" title="Capture the page again (new PDF and AI fill)">Re-capture</button>
               <button class="btn ghost danger" [disabled]="readonly()" (click)="rejecting.set(true)" title="X">Reject</button>
               <button class="btn" [disabled]="readonly() || !dirty() || saving()" (click)="save()" title="Ctrl+S">Save</button>
               <button class="btn primary" [disabled]="readonly() || saving()" (click)="approve()" title="Ctrl+Enter or A">
